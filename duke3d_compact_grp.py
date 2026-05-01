@@ -58,6 +58,12 @@ def main():
     for art_file in temp_dir.glob("TILES*.ART"):
         art_file.rename(temp_dir / art_file.name.lower())
 
+    # normalize palette file casing for runtime lookup
+    palette_upper = temp_dir / "PALETTE.DAT"
+    palette_lower = temp_dir / "palette.dat"
+    if palette_upper.exists() and not palette_lower.exists():
+        palette_upper.rename(palette_lower)
+
     # Step 2: extract tiles*.art, convert to PNG, build duke3d.def
     duke_def_path = temp_dir / "duke3d.def"
     if duke_def_path.exists():
