@@ -53,6 +53,7 @@ class Bstring {
 
 Bstring::Bstring(void) { data = NULL; }
 Bstring::Bstring(const Bstring &value) {
+    data = NULL;
     if (&value != this)
         (*this)=value();
 }
@@ -117,7 +118,10 @@ unsigned Bstring::length(void) const { return Bstrlen(data); }
 
 void Bstring::clear(void)
 {
-    DO_FREE_AND_NULL(data);
+    if (data != NULL) {
+        Bfree(data);
+        data = NULL;
+    }
 }
 
 ////////// arttool //////////
@@ -553,7 +557,9 @@ public:
         const long int tempsize = Bftell(outfile);
         Brewind(outfile);
 
-        Bfclose(infile);
+        if (infile != NULL) {
+            Bfclose(infile);
+        }
 
         infile = Bfopen(filename_(),"wb");
 
