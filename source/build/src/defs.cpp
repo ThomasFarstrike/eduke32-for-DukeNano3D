@@ -246,13 +246,12 @@ static void Defs_ApplyPaletteToTileBuffer(int32_t const tsiz, int32_t const pal)
 
 static int32_t Defs_ImportTileFromTexture(char const * const fn, int32_t const tile, int32_t const alphacut, int32_t istexture)
 {
-    if (check_file_exist(fn))
-        return -1;
-
     int32_t xsiz = 0, ysiz = 0;
     palette_t *picptr = NULL;
 
     int32_t const length = kpzbufload(fn);
+    if (length == 0)
+        return -1;
 #ifdef WITHKPLIB
     kpzdecode(length, (intptr_t *)&picptr, &xsiz, &ysiz);
 #endif
