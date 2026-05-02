@@ -42,6 +42,18 @@ float osdscale = 1.f, osdrscale = 1.f;
 #define OSDCHAR_WIDTH (tilesiz[STARTALPHANUM + 'A' - '!'].x)
 #define OSDCHAR_HEIGHT (tilesiz[STARTALPHANUM + 'A' - '!'].y + 1)
 
+static inline int dukeConsoleCharWidth(void)
+{
+    int const w = OSDCHAR_WIDTH;
+    return w > 0 ? w : 8;
+}
+
+static inline int dukeConsoleCharHeight(void)
+{
+    int const h = OSDCHAR_HEIGHT;
+    return h > 1 ? h : 9;
+}
+
 static inline CONSTEXPR int GAME_isspace(int ch)
 {
     return (ch==32 || ch==9);
@@ -66,8 +78,11 @@ void dukeConsolePrintChar(int x, int y, char ch, int shade, int pal)
         return;
 
     usehightile = (osdhightile && ht);
-    rotatesprite_fs(OSD_SCALE((OSDCHAR_WIDTH*x)<<16),
-        OSD_SCALE((y*OSDCHAR_HEIGHT)<<16),
+    int const charw = dukeConsoleCharWidth();
+    int const charh = dukeConsoleCharHeight();
+
+    rotatesprite_fs(OSD_SCALE((charw*x)<<16),
+        OSD_SCALE((y*charh)<<16),
         OSD_SCALE(65536.f), 0, ac, shade, pal, 8|16);
     usehightile = ht;
 }
@@ -80,7 +95,10 @@ void dukeConsolePrintString(int x, int y, const char *ch, int len, int shade, in
     usehightile = (osdhightile && ht);
 #endif
 
-    x *= OSDCHAR_WIDTH;
+    int const charw = dukeConsoleCharWidth();
+    int const charh = dukeConsoleCharHeight();
+
+    x *= charw;
 
     do
     {
@@ -88,11 +106,11 @@ void dukeConsolePrintString(int x, int y, const char *ch, int len, int shade, in
             if ((ac = GAME_getchartile(*ch)) >= 0)
             {
                 OSD_GetShadePal(ch, &shade, &pal);
-                rotatesprite_fs(OSD_SCALE(x<<16), OSD_SCALE((y*OSDCHAR_HEIGHT)<<16),
+                rotatesprite_fs(OSD_SCALE(x<<16), OSD_SCALE((y*charh)<<16),
                     OSD_SCALE(65536.f), 0, ac, shade, pal, 8|16);
             }
 
-        x += OSDCHAR_WIDTH;
+        x += charw;
         ch++;
     }
     while (--len);
@@ -107,19 +125,24 @@ void dukeConsolePrintCursor(int x, int y, int type, int32_t lastkeypress)
     int ac = (type) ? SMALLFNTCURSOR : '_' - '!' + STARTALPHANUM;
 
     if (((BGetTime()-lastkeypress) & 0x40)==0)
-        rotatesprite_fs(OSD_SCALE((OSDCHAR_WIDTH*x)<<16),
-        OSD_SCALE(((y*OSDCHAR_HEIGHT)+(type?-1:2))<<16),
-        OSD_SCALE(65536.f), 0, ac, 0, 8, 8|16);
+    {
+        int const charw = dukeConsoleCharWidth();
+        int const charh = dukeConsoleCharHeight();
+
+        rotatesprite_fs(OSD_SCALE((charw*x)<<16),
+            OSD_SCALE(((y*charh)+(type?-1:2))<<16),
+            OSD_SCALE(65536.f), 0, ac, 0, 8, 8|16);
+    }
 }
 
 int dukeConsoleGetColumnWidth(int w)
 {
-     return OSD_SCALEDIV(w/OSDCHAR_WIDTH);
+    return OSD_SCALEDIV(w/dukeConsoleCharWidth());
 }
 
 int dukeConsoleGetRowHeight(int h)
 {
-    return OSD_SCALEDIV(h/OSDCHAR_HEIGHT);
+    return OSD_SCALEDIV(h/dukeConsoleCharHeight());
 }
 
 void dukeConsoleOnShowCallback(int shown)
@@ -145,7 +168,8 @@ void dukeConsoleClearBackground(int numcols, int numrows)
 #ifdef USE_OPENGL
     if (videoGetRenderMode() >= REND_POLYMOST && in3dmode())
     {
-        int const i8n8 = OSD_SCALE(OSDCHAR_HEIGHT*numrows);
+        int const charh = dukeConsoleCharHeight();
+        int const i8n8 = OSD_SCALE(charh*numrows);
 
         polymost_setFogEnabled(false);
         polymost_useColorOnly(true);
@@ -155,9 +179,9 @@ void dukeConsoleClearBackground(int numcols, int numrows)
         buildgl_setEnabled(GL_BLEND);
         buildgl_setDisabled(GL_ALPHA_TEST);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glRecti(0, 0, xdim, i8n8+OSDCHAR_HEIGHT);
+        glRecti(0, 0, xdim, i8n8+charh);
         glColor4f(0.f, 0.f, 0.f, 1.f);
-        glRecti(0, i8n8+4, xdim, i8n8+OSDCHAR_HEIGHT);
+        glRecti(0, i8n8+4, xdim, i8n8+charh);
 
         polymost_useColorOnly(false);
 
@@ -168,7 +192,8 @@ void dukeConsoleClearBackground(int numcols, int numrows)
     }
 #endif
 
-    CLEARLINES2D(0, min(ydim, OSD_SCALE(numrows * OSDCHAR_HEIGHT + OSDCHAR_HEIGHT)), editorcolors[16]);
+    int const charh = dukeConsoleCharHeight();
+    CLEARLINES2D(0, min(ydim, OSD_SCALE(numrows * charh + charh)), editorcolors[16]);
 }
 
 #undef OSD_SCALE
