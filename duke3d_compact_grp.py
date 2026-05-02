@@ -3,6 +3,7 @@ import argparse
 import os
 from pathlib import Path
 import shutil
+import re
 import subprocess
 
 def run(cmd, cwd, check=True):
@@ -23,6 +24,23 @@ def collect_files(temp_dir: Path, patterns):
     for pattern in patterns:
         files.extend(sorted(temp_dir.glob(pattern)))
     return files
+
+def get_tile_raw_size(arttool: Path, cwd: Path, tile_num: int):
+    proc = subprocess.run(
+        [str(arttool), "info", str(tile_num)],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    match = re.search(rf"Tile\s+{tile_num}:\s+(\d+)x(\d+)", output)
+    if not match:
+        return None
+    width = int(match.group(1))
+    height = int(match.group(2))
+    return width * height
+
 
 def main():
     parser = argparse.ArgumentParser(description="Re-package Duke Nukem 3D GRP with PNG tiles and duke3d.def")
@@ -90,18 +108,36 @@ def main():
             name = art_file.stem  # TILES000
             digits = "".join(ch for ch in name if ch.isdigit())
             tile_index = int(digits) if digits else 0
+            tiles_to_remove = []
 
             for tile_nr in range(256):
                 global_tile = tile_index * 256 + tile_nr
                 global_padded = f"{global_tile:04d}"
 
-                run([str(arttool), "exporttile", str(global_tile)], cwd=temp_dir, check=False)
                 local_pcx = temp_dir / f"tile{global_padded}.pcx"
+                if local_pcx.exists():
+                    local_pcx.unlink()
+
+                export_proc = subprocess.run(
+                    [str(arttool), "exporttile", str(global_tile)],
+                    cwd=temp_dir,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if export_proc.returncode != 0:
+                    if local_pcx.exists():
+                        local_pcx.unlink()
+                    continue
+
                 if not local_pcx.exists():
                     continue
 
                 out_png = temp_dir / f"TILE{global_padded}.PNG"
-                run([
+                if out_png.exists():
+                    out_png.unlink()
+
+                convert_proc = subprocess.run([
                     convert,
                     str(local_pcx),
                     "-alpha", "on",
@@ -112,11 +148,43 @@ def main():
                     "-define", "png:exclude-chunks=date,time",
                     "-colors", "256",
                     f"PNG8:{out_png}",
-                ], cwd=temp_dir)
+                ], cwd=temp_dir, check=False, capture_output=True, text=True)
 
-                duke_def.write(f"tilefromtexture {global_tile} {{ file TILE{global_padded}.PNG }}\n")
+                if convert_proc.returncode != 0 or not out_png.exists():
+                    print(f"[warn] convert failed for tile {global_tile}, keeping ART tile")
+                    if out_png.exists():
+                        out_png.unlink()
+                    if local_pcx.exists():
+                        local_pcx.unlink()
+                    continue
 
-    # Step 3: repack GRP without ART files
+                raw_size = get_tile_raw_size(arttool, temp_dir, global_tile)
+                png_size = out_png.stat().st_size
+
+                if raw_size is not None and png_size < raw_size:
+                    tiles_to_remove.append((global_tile, out_png))
+                else:
+                    out_png.unlink()
+
+                if local_pcx.exists():
+                    local_pcx.unlink()
+
+            for global_tile, out_png in tiles_to_remove:
+                rm_proc = subprocess.run(
+                    [str(arttool), "rmtile", str(global_tile)],
+                    cwd=temp_dir,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if rm_proc.returncode == 0:
+                    duke_def.write(f"tilefromtexture {global_tile} {{ file {out_png.name} }}\n")
+                else:
+                    print(f"[warn] rmtile failed for tile {global_tile}, keeping ART tile")
+                    if out_png.exists():
+                        out_png.unlink()
+
+    # Step 3: repack GRP with modified ART files and selected PNG replacements
     patterns = [
         "*.VOC", "*.voc",
         "*.PNG", "*.png",
@@ -126,6 +194,7 @@ def main():
         "*.MAP", "*.map",
         "duke3d.def",
         "*.MID", "*.mid",
+        "*.ART", "*.art",
     ]
     files = collect_files(temp_dir, patterns)
 
