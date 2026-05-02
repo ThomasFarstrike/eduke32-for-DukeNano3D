@@ -53,6 +53,11 @@ def main():
         action="store_true",
         help="Process only tiles000.art into PNGs/duke3d.def and keep remaining ART files in the output GRP",
     )
+    parser.add_argument(
+        "--onlysmaller",
+        action="store_true",
+        help="Only replace tiles when PNG is smaller than raw tile data; keeps ART files in output",
+    )
     args = parser.parse_args()
 
     work_dir = Path.cwd().resolve()
@@ -161,10 +166,13 @@ def main():
                 raw_size = get_tile_raw_size(arttool, temp_dir, global_tile)
                 png_size = out_png.stat().st_size
 
-                if raw_size is not None and png_size < raw_size:
-                    tiles_to_remove.append((global_tile, out_png))
+                if args.onlysmaller:
+                    if raw_size is not None and png_size < raw_size:
+                        tiles_to_remove.append((global_tile, out_png))
+                    else:
+                        out_png.unlink()
                 else:
-                    out_png.unlink()
+                    tiles_to_remove.append((global_tile, out_png))
 
                 if local_pcx.exists():
                     local_pcx.unlink()
@@ -184,7 +192,7 @@ def main():
                     if out_png.exists():
                         out_png.unlink()
 
-    # Step 3: repack GRP with modified ART files and selected PNG replacements
+    # Step 3: repack GRP. ART files are included for --onlysmaller (or --quicktest)
     patterns = [
         "*.VOC", "*.voc",
         "*.PNG", "*.png",
@@ -194,14 +202,17 @@ def main():
         "*.MAP", "*.map",
         "duke3d.def",
         "*.MID", "*.mid",
-        "*.ART", "*.art",
     ]
+    if args.onlysmaller:
+        patterns.extend(["*.ART", "*.art"])
+
     files = collect_files(temp_dir, patterns)
 
     if args.quicktest:
         files.extend(sorted(temp_dir.glob("TILES*.ART")))
         files.extend(sorted(temp_dir.glob("tiles*.art")))
-        files = [f for f in files if f.name != "tiles000.art"]
+        if not args.onlysmaller:
+            files = [f for f in files if f.name != "tiles000.art"]
 
     # de-duplicate while preserving order
     files = list(dict.fromkeys(files))
