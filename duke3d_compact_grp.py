@@ -30,6 +30,11 @@ def main():
     parser.add_argument("--temp-dir", default="temp_folder", help="Temporary working directory")
     parser.add_argument("--output", default="newfile.grp", help="Output GRP filename")
     parser.add_argument("--keep-temp", action="store_true", help="Keep temporary working directory")
+    parser.add_argument(
+        "--quicktest",
+        action="store_true",
+        help="Process only tiles000.art into PNGs/duke3d.def and keep remaining ART files in the output GRP",
+    )
     args = parser.parse_args()
 
     work_dir = Path.cwd().resolve()
@@ -55,8 +60,14 @@ def main():
     run([str(kextract), str(grp_path), "*"], cwd=temp_dir)
 
     # arttool expects lowercase tilesXXX.art filenames
-    for art_file in temp_dir.glob("TILES*.ART"):
-        art_file.rename(temp_dir / art_file.name.lower())
+    if args.quicktest:
+        first_art_upper = temp_dir / "TILES000.ART"
+        first_art_lower = temp_dir / "tiles000.art"
+        if first_art_upper.exists():
+            first_art_upper.rename(first_art_lower)
+    else:
+        for art_file in temp_dir.glob("TILES*.ART"):
+            art_file.rename(temp_dir / art_file.name.lower())
 
     # normalize palette file casing for runtime lookup
     palette_upper = temp_dir / "PALETTE.DAT"
@@ -70,7 +81,11 @@ def main():
         duke_def_path.unlink()
 
     with duke_def_path.open("w", encoding="utf-8") as duke_def:
-        art_files = sorted(temp_dir.glob("tiles*.art"))
+        if args.quicktest:
+            first_art = temp_dir / "tiles000.art"
+            art_files = [first_art] if first_art.exists() else []
+        else:
+            art_files = sorted(temp_dir.glob("tiles*.art"))
         for art_file in art_files:
             name = art_file.stem  # TILES000
             digits = "".join(ch for ch in name if ch.isdigit())
@@ -89,9 +104,12 @@ def main():
                 run([
                     convert,
                     str(local_pcx),
+                    "-alpha", "on",
+                    "-transparent", "#FC00FC",
                     "-strip",
                     "-define", "png:compression-level=9",
                     "-define", "png:compression-strategy=1",
+                    "-define", "png:exclude-chunks=date,time",
                     "-colors", "256",
                     f"PNG8:{out_png}",
                 ], cwd=temp_dir)
@@ -110,6 +128,15 @@ def main():
         "*.MID", "*.mid",
     ]
     files = collect_files(temp_dir, patterns)
+
+    if args.quicktest:
+        files.extend(sorted(temp_dir.glob("TILES*.ART")))
+        files.extend(sorted(temp_dir.glob("tiles*.art")))
+        files = [f for f in files if f.name != "tiles000.art"]
+
+    # de-duplicate while preserving order
+    files = list(dict.fromkeys(files))
+
     if not files:
         print("No files found to pack.")
         return 1
