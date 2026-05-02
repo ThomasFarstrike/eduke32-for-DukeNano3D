@@ -42,6 +42,22 @@ def get_tile_raw_size(arttool: Path, cwd: Path, tile_num: int):
     return width * height
 
 
+def parse_tilefiles_arg(value: str):
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError("Expected comma-separated tile file indices, e.g. 0,1,2")
+
+    indices = []
+    for part in parts:
+        if not part.isdigit():
+            raise argparse.ArgumentTypeError(
+                f"Invalid tile file index '{part}'. Expected non-negative integers like 0,1,2"
+            )
+        indices.append(int(part))
+
+    return sorted(set(indices))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Re-package Duke Nukem 3D GRP with PNG tiles and duke3d.def")
     parser.add_argument("grpfile", help="Path to .grp file to compact")
@@ -49,9 +65,11 @@ def main():
     parser.add_argument("--output", default="newfile.grp", help="Output GRP filename")
     parser.add_argument("--keep-temp", action="store_true", help="Keep temporary working directory")
     parser.add_argument(
-        "--quicktest",
-        action="store_true",
-        help="Process only tiles000.art into PNGs/duke3d.def and keep remaining ART files in the output GRP",
+        "--tilefilestopng",
+        "--tilesfilestopng",
+        "--tilestopng",
+        type=parse_tilefiles_arg,
+        help="Only convert specific TILESXXX.ART files to PNG (comma-separated indices, e.g. 0,1,2). Untouched ART files stay in output.",
     )
     parser.add_argument(
         "--onlysmaller",
@@ -59,6 +77,8 @@ def main():
         help="Only replace tiles when PNG is smaller than raw tile data; keeps ART files in output",
     )
     args = parser.parse_args()
+
+    selected_tile_files = set(args.tilefilestopng or [])
 
     work_dir = Path.cwd().resolve()
     script_dir = Path(__file__).resolve().parent
@@ -68,6 +88,12 @@ def main():
         return 1
 
     temp_dir = (work_dir / args.temp_dir).resolve()
+
+    # Always remove default temp_folder as requested, then remove selected temp dir.
+    default_temp_dir = (work_dir / "temp_folder").resolve()
+    if default_temp_dir.exists():
+        shutil.rmtree(default_temp_dir)
+
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(parents=True)
@@ -82,12 +108,13 @@ def main():
     # Step 1: extract GRP into temp_dir
     run([str(kextract), str(grp_path), "*"], cwd=temp_dir)
 
-    # arttool expects lowercase tilesXXX.art filenames
-    if args.quicktest:
-        first_art_upper = temp_dir / "TILES000.ART"
-        first_art_lower = temp_dir / "tiles000.art"
-        if first_art_upper.exists():
-            first_art_upper.rename(first_art_lower)
+    # arttool expects lowercase tilesXXX.art filenames for files we process.
+    if selected_tile_files:
+        for tile_file_index in sorted(selected_tile_files):
+            selected_upper = temp_dir / f"TILES{tile_file_index:03d}.ART"
+            selected_lower = temp_dir / f"tiles{tile_file_index:03d}.art"
+            if selected_upper.exists() and not selected_lower.exists():
+                selected_upper.rename(selected_lower)
     else:
         for art_file in temp_dir.glob("TILES*.ART"):
             art_file.rename(temp_dir / art_file.name.lower())
@@ -104,9 +131,12 @@ def main():
         duke_def_path.unlink()
 
     with duke_def_path.open("w", encoding="utf-8") as duke_def:
-        if args.quicktest:
-            first_art = temp_dir / "tiles000.art"
-            art_files = [first_art] if first_art.exists() else []
+        if selected_tile_files:
+            art_files = [
+                temp_dir / f"tiles{tile_file_index:03d}.art"
+                for tile_file_index in sorted(selected_tile_files)
+                if (temp_dir / f"tiles{tile_file_index:03d}.art").exists()
+            ]
         else:
             art_files = sorted(temp_dir.glob("tiles*.art"))
         for art_file in art_files:
@@ -145,6 +175,7 @@ def main():
                 convert_proc = subprocess.run([
                     convert,
                     str(local_pcx),
+                    #"-alpha", "off",
                     "-alpha", "on",
                     "-transparent", "#FC00FC",
                     "-strip",
@@ -192,7 +223,7 @@ def main():
                     if out_png.exists():
                         out_png.unlink()
 
-    # Step 3: repack GRP. ART files are included for --onlysmaller (or --quicktest)
+    # Step 3: repack GRP. ART files are included for --onlysmaller or selective tile-file processing.
     patterns = [
         "*.VOC", "*.voc",
         "*.PNG", "*.png",
@@ -203,16 +234,15 @@ def main():
         "duke3d.def",
         "*.MID", "*.mid",
     ]
-    if args.onlysmaller:
+    if args.onlysmaller or selected_tile_files:
         patterns.extend(["*.ART", "*.art"])
 
     files = collect_files(temp_dir, patterns)
 
-    if args.quicktest:
-        files.extend(sorted(temp_dir.glob("TILES*.ART")))
-        files.extend(sorted(temp_dir.glob("tiles*.art")))
-        if not args.onlysmaller:
-            files = [f for f in files if f.name != "tiles000.art"]
+    if selected_tile_files and not args.onlysmaller:
+        selected_processed = {f"tiles{idx:03d}.art" for idx in selected_tile_files}
+        selected_processed.update({f"TILES{idx:03d}.ART" for idx in selected_tile_files})
+        files = [f for f in files if f.name not in selected_processed]
 
     # de-duplicate while preserving order
     files = list(dict.fromkeys(files))
