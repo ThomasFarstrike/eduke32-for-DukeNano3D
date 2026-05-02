@@ -420,7 +420,7 @@ tools_targets := \
     kgroup \
     kmd2tool \
     map2stl \
-    maptiles \
+    mapinfo \
     md2tool \
     mkpalette \
     transpal \
