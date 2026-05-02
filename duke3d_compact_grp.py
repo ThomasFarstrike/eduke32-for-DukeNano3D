@@ -160,10 +160,10 @@ def main():
                     capture_output=True,
                     text=True,
                 )
-                if export_proc.returncode != 0:
-                    if local_pcx.exists():
-                        local_pcx.unlink()
-                    continue
+                #if export_proc.returncode != 0:
+                #    if local_pcx.exists():
+                #        local_pcx.unlink()
+                #    continue
 
                 if not local_pcx.exists():
                     continue
@@ -187,42 +187,40 @@ def main():
                 ], cwd=temp_dir, check=False, capture_output=True, text=True)
 
                 if convert_proc.returncode != 0 or not out_png.exists():
-                    print(f"[warn] convert failed for tile {global_tile}, keeping ART tile")
+                    print(f"[error] convert failed for tile {global_tile}; aborting")
+                    if convert_proc.stdout:
+                        print(convert_proc.stdout)
+                    if convert_proc.stderr:
+                        print(convert_proc.stderr)
                     if out_png.exists():
                         out_png.unlink()
-                    if local_pcx.exists():
-                        local_pcx.unlink()
-                    continue
+                    return 1
 
                 raw_size = get_tile_raw_size(arttool, temp_dir, global_tile)
                 png_size = out_png.stat().st_size
 
                 if args.onlysmaller:
+                    # Only do arttool rmtile in --onlysmaller mode (requested: buggy otherwise).
                     if raw_size is not None and png_size < raw_size:
-                        tiles_to_remove.append((global_tile, out_png))
+                        rm_proc = subprocess.run(
+                            [str(arttool), "rmtile", str(global_tile)],
+                            cwd=temp_dir,
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                        )
+                        if rm_proc.returncode == 0:
+                            duke_def.write(f"tilefromtexture {global_tile} {{ file {out_png.name} }}\n")
+                        else:
+                            print(f"[warn] rmtile failed for tile {global_tile}, keeping ART tile")
+                            out_png.unlink()
                     else:
                         out_png.unlink()
                 else:
-                    tiles_to_remove.append((global_tile, out_png))
-
-                if local_pcx.exists():
-                    local_pcx.unlink()
-
-            for global_tile, out_png in tiles_to_remove:
-                rm_proc = subprocess.run(
-                    [str(arttool), "rmtile", str(global_tile)],
-                    cwd=temp_dir,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                if rm_proc.returncode == 0:
+                    # In normal mode, keep ART as-is and override via DEF only.
                     duke_def.write(f"tilefromtexture {global_tile} {{ file {out_png.name} }}\n")
-                else:
-                    print(f"[warn] rmtile failed for tile {global_tile}, keeping ART tile")
-                    if out_png.exists():
-                        out_png.unlink()
 
+                # Keep PCX files for debugging when --keep-temp is used.
     # Step 3: repack GRP. ART files are included for --onlysmaller or selective tile-file processing.
     patterns = [
         "*.VOC", "*.voc",
