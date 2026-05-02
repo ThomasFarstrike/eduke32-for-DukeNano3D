@@ -1,0 +1,1 @@
+python duke3d_compact_grp.py --keep-temp /tmp/DUKE3D_v1.3d_shareware.grp 
