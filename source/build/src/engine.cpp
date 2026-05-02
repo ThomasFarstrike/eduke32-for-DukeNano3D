@@ -40,6 +40,34 @@
 # include "polymost.h"
 #endif
 
+static constexpr int32_t kTileDebugWatch = 743;
+
+static FORCE_INLINE int32_t tileDebugWatchMatchEngine(int32_t const tile)
+{
+    return tile == kTileDebugWatch;
+}
+
+static void tileDebugLogEngine(char const * const stage, int32_t const tile)
+{
+    if (!tileDebugWatchMatchEngine(tile))
+        return;
+
+    LOG_F(INFO,
+          "[TILEDBG] %s tile=%d size=%dx%d picsiz=0x%02x waloff=%" PRIdPTR " walock=%d gotpic=%d picanm.num=%d xofs=%d yofs=%d sf=0x%04x",
+          stage,
+          tile,
+          tilesiz[tile].x,
+          tilesiz[tile].y,
+          picsiz[tile],
+          waloff[tile],
+          (int32_t) walock[tile],
+          (int32_t) bitmap_test(gotpic, tile),
+          (int32_t) picanm[tile].num,
+          (int32_t) picanm[tile].xofs,
+          (int32_t) picanm[tile].yofs,
+          (uint32_t) picanm[tile].sf);
+}
+
 //////////
 // Compilation switches for optional/extended engine features
 
@@ -2062,18 +2090,34 @@ intptr_t tileLoadScaled(int const picnum, vec2_16_t *upscale/* = nullptr*/)
 {
     intptr_t bufplc;
 
+    tileDebugLogEngine("tileLoadScaled:begin", picnum);
+
     if ((globalht = tileLoadHigh(picnum)))
     {
         bufplc = globalht->ptr;
 
         if (upscale)
             *upscale = globalht->upscale;
+
+        if (tileDebugWatchMatchEngine(picnum))
+            LOG_F(INFO, "[TILEDBG] tileLoadScaled:high tile=%d ptr=%" PRIdPTR " upscale=%d,%d", picnum, bufplc, globalht->upscale.x, globalht->upscale.y);
     }
     else
     {
-        if (waloff[picnum] == 0) tileLoad(picnum);
+        if (waloff[picnum] == 0)
+        {
+            if (tileDebugWatchMatchEngine(picnum))
+                LOG_F(INFO, "[TILEDBG] tileLoadScaled:calling tileLoad tile=%d", picnum);
+            tileLoad(picnum);
+        }
+
         bufplc = waloff[picnum];
+
+        tileDebugLogEngine("tileLoadScaled:art", picnum);
     }
+
+    if (tileDebugWatchMatchEngine(picnum))
+        LOG_F(INFO, "[TILEDBG] tileLoadScaled:return tile=%d bufplc=%" PRIdPTR, picnum, bufplc);
 
     return bufplc;
 }
@@ -8056,8 +8100,16 @@ static void dorotatesprite(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t
 
     setgotpic(picnum);
 
+    tileDebugLogEngine("dorotatesprite:after-setgotpic", picnum);
+
     vec2_16_t upscale = {};
     bufplc = tileLoadScaled(picnum, &upscale);
+
+    if (tileDebugWatchMatchEngine(picnum))
+        LOG_F(INFO,
+              "[TILEDBG] dorotatesprite:loaded tile=%d bufplc=%" PRIdPTR " upscale=%d,%d stat=0x%x pal=%d shade=%d alpha=%u blend=%u clip=[%d,%d]-[%d,%d] z=%d a=%d uniq=%d",
+              picnum, bufplc, upscale.x, upscale.y, dastat, (int32_t)dapalnum, (int32_t)dashade, (unsigned)daalpha, (unsigned)dablend,
+              cx1, cy1, cx2, cy2, z, (int32_t)a, uniqid);
 
     if (palookup[dapalnum] == NULL) dapalnum = 0;
     palookupoffs = FP_OFF(palookup[dapalnum]) + (getpalookup(0, dashade)<<8);
@@ -13831,10 +13883,25 @@ void rotatesprite_(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
     if ((unsigned)picnum >= MAXTILES)
         return;
 
+    int32_t const picnumInput = picnum;
+
     if ((cx1 > cx2) || (cy1 > cy2)) return;
     if (z <= 16) return;
     tileUpdatePicnum(&picnum, (int16_t)0xc000);
-    if ((tilesiz[picnum].x <= 0) || (tilesiz[picnum].y <= 0)) return;
+
+    if (tileDebugWatchMatchEngine(picnumInput) || tileDebugWatchMatchEngine(picnum))
+    {
+        LOG_F(INFO,
+              "[TILEDBG] rotatesprite_:precheck input=%d resolved=%d size=%dx%d stat=0x%x pal=%d shade=%d alpha=%u blend=%u clip=[%d,%d]-[%d,%d] z=%d a=%d",
+              picnumInput, picnum, tilesiz[picnum].x, tilesiz[picnum].y, dastat, (int32_t)dapalnum, (int32_t)dashade,
+              (unsigned)daalpha, (unsigned)dablend, cx1, cy1, cx2, cy2, z, (int32_t)a);
+    }
+
+    if ((tilesiz[picnum].x <= 0) || (tilesiz[picnum].y <= 0))
+    {
+        tileDebugLogEngine("rotatesprite_:abort-size<=0", picnum);
+        return;
+    }
 
     // Experimental / development bits. ONLY FOR INTERNAL USE!
     //  bit RS_CENTERORIGIN: see dorotspr_handle_bit2
@@ -15045,6 +15112,9 @@ void renderSetRollAngle(int32_t rolla)
 //
 void tileInvalidate(int16_t tilenume, int32_t pal, int32_t how)
 {
+    if (tileDebugWatchMatchEngine(tilenume))
+        LOG_F(INFO, "[TILEDBG] tileInvalidate:begin tile=%d pal=%d how=%d rend=%d", tilenume, pal, how, videoGetRenderMode());
+
 #if !defined USE_OPENGL
     UNREFERENCED_PARAMETER(tilenume);
     UNREFERENCED_PARAMETER(pal);
@@ -15068,6 +15138,9 @@ void tileInvalidate(int16_t tilenume, int32_t pal, int32_t how)
 #endif
     }
 #endif
+
+    if (tileDebugWatchMatchEngine(tilenume))
+        tileDebugLogEngine("tileInvalidate:end", tilenume);
 }
 
 /*

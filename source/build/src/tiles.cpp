@@ -16,6 +16,35 @@
 #include "texcache.h"
 #include "vfs.h"
 
+static constexpr int32_t kTileDebugWatch = 743;
+
+static FORCE_INLINE int32_t tileDebugWatchMatch(int32_t const tile)
+{
+    return tile == kTileDebugWatch;
+}
+
+static void tileDebugLog(char const * const stage, int32_t const tile, int32_t const dasiz = -1)
+{
+    if (!tileDebugWatchMatch(tile))
+        return;
+
+    LOG_F(INFO,
+          "[TILEDBG] %s tile=%d size=%dx%d picsiz=0x%02x waloff=%" PRIdPTR " walock=%d dasiz=%d faketile=%d tilefilenum=%d xofs=%d yofs=%d sf=0x%04x",
+          stage,
+          tile,
+          tilesiz[tile].x,
+          tilesiz[tile].y,
+          picsiz[tile],
+          waloff[tile],
+          (int32_t) walock[tile],
+          dasiz,
+          bitmap_test(faketile, tile),
+          (int32_t) tilefilenum[tile],
+          (int32_t) picanm[tile].xofs,
+          (int32_t) picanm[tile].yofs,
+          (uint32_t) picanm[tile].sf);
+}
+
 static void *g_vm_data;
 
 // The tile file number (tilesXXX <- this) of each tile:
@@ -248,6 +277,8 @@ void tileSetData(int32_t const tile, int32_t tsiz, char const * const buffer)
 
 static void tileSoftDelete(int32_t const tile)
 {
+    tileDebugLog("tileSoftDelete:before", tile);
+
     tilesiz[tile].x = 0;
     tilesiz[tile].y = 0;
     picsiz[tile] = 0;
@@ -259,10 +290,14 @@ static void tileSoftDelete(int32_t const tile)
     bitmap_clear(faketile, tile);
 
     Bmemset(&picanm[tile], 0, sizeof(picanm_t));
+
+    tileDebugLog("tileSoftDelete:after", tile);
 }
 
 void tileDelete(int32_t const tile)
 {
+    tileDebugLog("tileDelete:begin", tile);
+
     tileSoftDelete(tile);
 
     DO_FREE_AND_NULL(faketiledata[tile]);
@@ -275,6 +310,8 @@ void tileDelete(int32_t const tile)
 
     md_undefinetile(tile);
 #endif
+
+    tileDebugLog("tileDelete:end", tile);
 }
 
 void tileUpdatePicSiz(int32_t picnum)
@@ -293,10 +330,25 @@ void tileUpdatePicSiz(int32_t picnum)
 
 void tileSetSize(int32_t picnum, int16_t dasizx, int16_t dasizy)
 {
+    int16_t const oldx = tilesiz[picnum].x;
+    int16_t const oldy = tilesiz[picnum].y;
+
     tilesiz[picnum].x = dasizx;
     tilesiz[picnum].y = dasizy;
 
     tileUpdatePicSiz(picnum);
+
+    if (tileDebugWatchMatch(picnum))
+    {
+        LOG_F(INFO,
+              "[TILEDBG] tileSetSize tile=%d old=%dx%d new=%dx%d picsiz=0x%02x",
+              picnum,
+              oldx,
+              oldy,
+              dasizx,
+              dasizy,
+              picsiz[picnum]);
+    }
 }
 
 int32_t artReadHeader(buildvfs_kfd const fil, char const * const fn, artheader_t * const local)
@@ -634,16 +686,29 @@ bool tileLoad(int16_t tileNum)
 {
     if ((unsigned) tileNum >= (unsigned) MAXTILES) return 0;
     int const dasiz = tilesiz[tileNum].x*tilesiz[tileNum].y;
-    if (dasiz <= 0) return 0;
+
+    tileDebugLog("tileLoad:begin", tileNum, dasiz);
+
+    if (dasiz <= 0)
+    {
+        tileDebugLog("tileLoad:abort-dasiz<=0", tileNum, dasiz);
+        return 0;
+    }
 
     // Allocate storage if necessary.
     if (waloff[tileNum] == 0)
     {
+        tileDebugLog("tileLoad:alloc-before", tileNum, dasiz);
+
         walock[tileNum] = CACHE1D_UNLOCKED;
         g_cache.allocateBlock(&waloff[tileNum], dasiz, &walock[tileNum]);
+
+        tileDebugLog("tileLoad:alloc-after", tileNum, dasiz);
     }
 
     tileLoadData(tileNum, dasiz, (char *) waloff[tileNum]);
+
+    tileDebugLog("tileLoad:after-tileLoadData", tileNum, dasiz);
 
 #ifdef USE_OPENGL
     if (videoGetRenderMode() >= REND_POLYMOST &&
@@ -661,7 +726,12 @@ bool tileLoad(int16_t tileNum)
 
     tilePostLoad(tileNum);
 
-    return (waloff[tileNum] != 0 && tilesiz[tileNum].x > 0 && tilesiz[tileNum].y > 0);
+    int32_t const ok = (waloff[tileNum] != 0 && tilesiz[tileNum].x > 0 && tilesiz[tileNum].y > 0);
+
+    if (tileDebugWatchMatch(tileNum))
+        LOG_F(INFO, "[TILEDBG] tileLoad:return tile=%d ok=%d", tileNum, ok);
+
+    return ok;
 }
 
 void tileMaybeRotate(int16_t tilenume)
@@ -687,16 +757,22 @@ void tileMaybeRotate(int16_t tilenume)
 
 void tileLoadData(int16_t tilenume, int32_t dasiz, char *buffer)
 {
+    tileDebugLog("tileLoadData:begin", tilenume, dasiz);
+
     int const owner = rottile[tilenume].owner;
 
     if (owner != -1)
     {
+        if (tileDebugWatchMatch(tilenume) || tileDebugWatchMatch(owner))
+            LOG_F(INFO, "[TILEDBG] tileLoadData:rot owner=%d tile=%d ownerWaloff=%" PRIdPTR, owner, tilenume, waloff[owner]);
+
         if (!waloff[owner])
             tileLoad(owner);
 
         if (waloff[owner] && waloff[tilenume])
             tileMaybeRotate(tilenume);
 
+        tileDebugLog("tileLoadData:return-rot", tilenume, dasiz);
         return;
     }
 
@@ -705,16 +781,23 @@ void tileLoadData(int16_t tilenume, int32_t dasiz, char *buffer)
     // dummy tiles for highres replacements and tilefromtexture definitions
     if (bitmap_test(faketile, tilenume))
     {
+        if (tileDebugWatchMatch(tilenume))
+            LOG_F(INFO, "[TILEDBG] tileLoadData:faketile compressedSize=%d data=%p", faketilesize[tilenume], (void *)faketiledata[tilenume]);
+
         if (faketiledata[tilenume] != NULL)
             LZ4_decompress_safe(faketiledata[tilenume], buffer, faketilesize[tilenume], dasiz);
 
         faketimerhandler();
+        tileDebugLog("tileLoadData:return-faketile", tilenume, dasiz);
         return;
     }
 
     // Potentially switch open ART file.
     if (tfn != artfilnum)
     {
+        if (tileDebugWatchMatch(tilenume))
+            LOG_F(INFO, "[TILEDBG] tileLoadData:switch-artfile tfn=%d oldArtfilnum=%d", tfn, artfilnum);
+
         if (artfil != buildvfs_kfd_invalid)
             kclose(artfil);
 
@@ -738,6 +821,9 @@ void tileLoadData(int16_t tilenume, int32_t dasiz, char *buffer)
     // Seek to the right position.
     if (artfilplc != tilefileoffs[tilenume])
     {
+        if (tileDebugWatchMatch(tilenume))
+            LOG_F(INFO, "[TILEDBG] tileLoadData:seek from=%d to=%d", artfilplc, tilefileoffs[tilenume]);
+
         klseek(artfil, tilefileoffs[tilenume], BSEEK_SET);
         faketimerhandler();
     }
@@ -745,6 +831,8 @@ void tileLoadData(int16_t tilenume, int32_t dasiz, char *buffer)
     kread(artfil, buffer, dasiz);
     faketimerhandler();
     artfilplc = tilefileoffs[tilenume]+dasiz;
+
+    tileDebugLog("tileLoadData:end", tilenume, dasiz);
 }
 
 static void tilePostLoad(int16_t tilenume)
