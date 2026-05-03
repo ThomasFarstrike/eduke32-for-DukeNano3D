@@ -306,8 +306,24 @@ static int process_map(const char *path, MapReport *report, std::vector<uint8_t>
             return 1;
         }
 
-        mark_tile(localUsed, (int16_t)LE16((uint16_t)sec.ceilingpicnum));
-        mark_tile(localUsed, (int16_t)LE16((uint16_t)sec.floorpicnum));
+        int16_t const ceilingPic = (int16_t)LE16((uint16_t)sec.ceilingpicnum);
+        int16_t const floorPic   = (int16_t)LE16((uint16_t)sec.floorpicnum);
+        uint16_t const ceilingStat = LE16(sec.ceilingstat);
+        uint16_t const floorStat   = LE16(sec.floorstat);
+
+        mark_tile(localUsed, ceilingPic);
+        mark_tile(localUsed, floorPic);
+
+        // Build's parallax skies use multiple consecutive tiles at runtime.
+        // Without engine/game CON state, use the classic default of 8 sky tiles.
+        constexpr int kDefaultParallaxSkyTileCount = 8;
+        if ((ceilingStat & 1) != 0)
+            for (int t = 1; t < kDefaultParallaxSkyTileCount; ++t)
+                mark_tile(localUsed, ceilingPic + t);
+
+        if ((floorStat & 1) != 0)
+            for (int t = 1; t < kDefaultParallaxSkyTileCount; ++t)
+                mark_tile(localUsed, floorPic + t);
     }
 
     uint16_t numwalls = 0;

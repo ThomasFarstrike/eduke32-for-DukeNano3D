@@ -43,6 +43,49 @@ def get_tile_raw_size(arttool: Path, cwd: Path, tile_num: int):
     return width * height
 
 
+def get_tile_anim_range(arttool: Path, cwd: Path, tile_num: int):
+    proc = subprocess.run(
+        [str(arttool), "info", str(tile_num)],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+
+    match_type = re.search(r"AnimType:\s*(\d+)", output)
+    match_frames = re.search(r"AnimFrames:\s*(\d+)", output)
+    if not match_type or not match_frames:
+        return tile_num, tile_num
+
+    anim_type = int(match_type.group(1))
+    anim_frames = int(match_frames.group(1))
+
+    if anim_frames <= 0 or anim_type == 0:
+        return tile_num, tile_num
+
+    if anim_type == 3:  # PICANM_ANIMTYPE_BACK
+        return tile_num - anim_frames, tile_num
+
+    # PICANM_ANIMTYPE_OSC / PICANM_ANIMTYPE_FWD
+    return tile_num, tile_num + anim_frames
+
+
+def expand_required_tiles_with_animation_frames(arttool: Path, cwd: Path, required_tiles):
+    expanded = set(required_tiles)
+
+    for tile in list(required_tiles):
+        first_tile, last_tile = get_tile_anim_range(arttool, cwd, tile)
+        if first_tile > last_tile:
+            first_tile, last_tile = last_tile, first_tile
+
+        for anim_tile in range(first_tile, last_tile + 1):
+            if anim_tile >= 0:
+                expanded.add(anim_tile)
+
+    return expanded
+
+
 def parse_tilefiles_arg(value: str):
     parts = [p.strip() for p in value.split(",") if p.strip()]
     if not parts:
@@ -324,6 +367,15 @@ def main():
 
         required_tiles = parse_used_tiles_from_mapinfo_output(mapinfo_output)
         print(f"[info] --map {map_file.name}: restricting to {len(required_tiles)} used tiles")
+
+        expanded_tiles = expand_required_tiles_with_animation_frames(arttool, temp_dir, required_tiles)
+        added_tiles = len(expanded_tiles) - len(required_tiles)
+        if added_tiles > 0:
+            required_tiles = expanded_tiles
+            print(
+                f"[info] --map {map_file.name}: added {added_tiles} animation-frame tiles "
+                f"(total now {len(required_tiles)})"
+            )
 
     if args.ultraminimalmenu:
         menu_allow_tiles = build_ultra_minimal_menu_allowlist()
