@@ -136,8 +136,42 @@ def normalize_case_insensitive_options(argv, option_names):
     return normalized
 
 
+def build_ultra_minimal_menu_allowlist():
+    """
+    Tile allowlist derived from EDuke32 menu/precache code paths:
+      - source/duke3d/src/premap.cpp: cacheDukeTiles()
+      - source/duke3d/src/menus.cpp: direct rotatesprite_fs/menu references
+
+    Intentionally includes only menu/UI-critical ranges and explicit menu screens,
+    not full gameplay precache ranges.
+    """
+    allow = set()
+
+    # premap.cpp cacheDukeTiles()
+    allow.update(range(2456, 2491))   # MENUSCREEN .. DUKECAR-1
+    allow.update(range(2822, 2916))   # STARTALPHANUM .. ENDALPHANUM
+    allow.update(range(2929, 3022))   # BIGALPHANUM-11 .. BIGALPHANUM+81
+    allow.update(range(3072, 3165))   # MINIFONT .. MINIFONT+92
+
+    # menus.cpp explicit menu/background draws
+    allow.update({
+        2445,             # F1HELP
+        2499,             # INGAMEDUKETHREEDEE
+        2503,             # PLUTOPAKSPRITE+2
+        2504, 2505, 2506, # credits backgrounds (2504+cm-MENU_CREDITS)
+        3240,             # BONUSSCREEN
+        3280,             # TEXTSTORY
+        3281,             # LOADSCREEN
+    })
+
+    return allow
+
+
 def main():
-    normalized_argv = normalize_case_insensitive_options(sys.argv[1:], ["--pngfolder", "--map", "--includeart"])
+    normalized_argv = normalize_case_insensitive_options(
+        sys.argv[1:],
+        ["--pngfolder", "--map", "--includeart", "--ultraminimalmenu"],
+    )
 
     parser = argparse.ArgumentParser(description="Re-package Duke Nukem 3D GRP with PNG tiles and duke3d.def")
     parser.add_argument("grpfile", help="Path to .grp file to compact")
@@ -183,6 +217,16 @@ def main():
         type=parse_includeart_arg,
         help="Force-include FILE.ART from extracted temp folder (repeatable, e.g. --includeart TILES012.ART)",
     )
+    parser.add_argument(
+        "--ultraminimalmenu",
+        action="store_true",
+        help=(
+            "Include an ultra-minimal menu/UI tile allowlist derived from "
+            "source/duke3d/src/premap.cpp + source/duke3d/src/menus.cpp. "
+            "Useful with --map to keep startup/menu tiles without bundling full ART files."
+        ),
+    )
+
     args = parser.parse_args(normalized_argv)
 
     selected_tile_files = set(args.tilefilestopng or [])
@@ -280,6 +324,16 @@ def main():
 
         required_tiles = parse_used_tiles_from_mapinfo_output(mapinfo_output)
         print(f"[info] --map {map_file.name}: restricting to {len(required_tiles)} used tiles")
+
+    if args.ultraminimalmenu:
+        menu_allow_tiles = build_ultra_minimal_menu_allowlist()
+        if required_tiles is None:
+            required_tiles = set()
+        required_tiles.update(menu_allow_tiles)
+        print(
+            f"[info] --ultraminimalmenu: added {len(menu_allow_tiles)} "
+            f"menu/precache tiles; total required tiles now {len(required_tiles)}"
+        )
 
     # arttool expects lowercase tilesXXX.art filenames for files we process.
     if selected_tile_files:
