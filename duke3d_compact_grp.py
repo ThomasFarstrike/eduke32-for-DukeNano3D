@@ -43,7 +43,7 @@ def get_tile_raw_size(arttool: Path, cwd: Path, tile_num: int):
     return width * height
 
 
-def get_tile_anim_range(arttool: Path, cwd: Path, tile_num: int):
+def get_tile_anim_info(arttool: Path, cwd: Path, tile_num: int):
     proc = subprocess.run(
         [str(arttool), "info", str(tile_num)],
         cwd=cwd,
@@ -55,20 +55,35 @@ def get_tile_anim_range(arttool: Path, cwd: Path, tile_num: int):
 
     match_type = re.search(r"AnimType:\s*(\d+)", output)
     match_frames = re.search(r"AnimFrames:\s*(\d+)", output)
-    if not match_type or not match_frames:
-        return tile_num, tile_num
+    match_speed = re.search(r"AnimSpeed:\s*(\d+)", output)
 
-    anim_type = int(match_type.group(1))
-    anim_frames = int(match_frames.group(1))
+    anim_type = int(match_type.group(1)) if match_type else 0
+    anim_frames = int(match_frames.group(1)) if match_frames else 0
+    anim_speed = int(match_speed.group(1)) if match_speed else 0
 
     if anim_frames <= 0 or anim_type == 0:
-        return tile_num, tile_num
+        first_tile = tile_num
+        last_tile = tile_num
+    elif anim_type == 3:  # PICANM_ANIMTYPE_BACK
+        first_tile = tile_num - anim_frames
+        last_tile = tile_num
+    else:
+        # PICANM_ANIMTYPE_OSC / PICANM_ANIMTYPE_FWD
+        first_tile = tile_num
+        last_tile = tile_num + anim_frames
 
-    if anim_type == 3:  # PICANM_ANIMTYPE_BACK
-        return tile_num - anim_frames, tile_num
+    return {
+        "type": anim_type,
+        "frames": anim_frames,
+        "speed": anim_speed,
+        "first": first_tile,
+        "last": last_tile,
+    }
 
-    # PICANM_ANIMTYPE_OSC / PICANM_ANIMTYPE_FWD
-    return tile_num, tile_num + anim_frames
+
+def get_tile_anim_range(arttool: Path, cwd: Path, tile_num: int):
+    info = get_tile_anim_info(arttool, cwd, tile_num)
+    return info["first"], info["last"]
 
 
 def expand_required_tiles_with_animation_frames(arttool: Path, cwd: Path, required_tiles):
@@ -100,6 +115,22 @@ def parse_tilefiles_arg(value: str):
         indices.append(int(part))
 
     return sorted(set(indices))
+
+
+def parse_tile_numbers_arg(value: str):
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError("Expected comma-separated tile numbers, e.g. 1289,1290,407")
+
+    numbers = []
+    for part in parts:
+        if not part.isdigit():
+            raise argparse.ArgumentTypeError(
+                f"Invalid tile number '{part}'. Expected non-negative integers like 1289,1290"
+            )
+        numbers.append(int(part))
+
+    return sorted(set(numbers))
 
 
 def find_file_case_insensitive(base_dir: Path, name: str):
@@ -454,6 +485,15 @@ def main():
             "Adds non-map essentials like crosshair, weapon HUD tiles and core FX/projectile tiles."
         ),
     )
+    parser.add_argument(
+        "--debug-tiles",
+        metavar="TILE1,TILE2,...",
+        type=parse_tile_numbers_arg,
+        help=(
+            "Print per-tile animation diagnostics after build (for PNG-only packs). "
+            "Example: --debug-tiles 1289,1290,407,411,2813"
+        ),
+    )
 
     args = parser.parse_args(normalized_argv)
 
@@ -619,6 +659,10 @@ def main():
         duke_def_path.unlink()
 
     with duke_def_path.open("w", encoding="utf-8") as duke_def:
+        written_tiles = set()
+        anim_def_candidates = {}
+        emitted_anim_ranges = []
+
         if selected_tile_files:
             art_files = [
                 temp_dir / f"tiles{tile_file_index:03d}.art"
@@ -748,6 +792,7 @@ def main():
                         )
                         if rm_proc.returncode == 0:
                             duke_def.write(f"tilefromtexture {global_tile} {{ file {out_png.name} }}\n")
+                            written_tiles.add(global_tile)
                         else:
                             print(f"[warn] rmtile failed for tile {global_tile}, keeping ART tile")
                             out_png.unlink()
@@ -756,8 +801,55 @@ def main():
                 else:
                     # In normal mode, keep ART as-is and override via DEF only.
                     duke_def.write(f"tilefromtexture {global_tile} {{ file {out_png.name} }}\n")
+                    written_tiles.add(global_tile)
+
+                if global_tile in written_tiles and global_tile not in anim_def_candidates:
+                    anim_info = get_tile_anim_info(arttool, temp_dir, global_tile)
+                    if anim_info["frames"] > 0 and anim_info["type"] > 0:
+                        anim_def_candidates[global_tile] = anim_info
 
                 # Keep PCX files for debugging when --keep-temp is used.
+
+        emitted_anim_defs = 0
+        skipped_anim_defs = 0
+        for anchor_tile in sorted(anim_def_candidates):
+            info = anim_def_candidates[anchor_tile]
+            first_tile = min(info["first"], info["last"])
+            last_tile = max(info["first"], info["last"])
+            needed_tiles = set(range(first_tile, last_tile + 1))
+
+            if not needed_tiles.issubset(written_tiles):
+                skipped_anim_defs += 1
+                continue
+
+            range_end = info["first"] if info["type"] == 3 else info["last"]
+            duke_def.write(
+                f"animtilerange {anchor_tile} {range_end} {info['speed']} {info['type']}\n"
+            )
+            emitted_anim_defs += 1
+            emitted_anim_ranges.append((anchor_tile, first_tile, last_tile, info["type"], info["speed"]))
+
+        if emitted_anim_defs > 0 or skipped_anim_defs > 0:
+            print(
+                f"[info] duke3d.def: emitted {emitted_anim_defs} animtilerange entries "
+                f"(skipped {skipped_anim_defs} due to incomplete frame coverage)"
+            )
+
+        if args.debug_tiles:
+            print("[debug] Animation diagnostics for requested tiles:")
+            for tile in args.debug_tiles:
+                anim_info = get_tile_anim_info(arttool, temp_dir, tile)
+                png_path = temp_dir / f"TILE{tile:04d}.PNG"
+                covered_by_emitted_range = any(start <= tile <= end for _, start, end, _, _ in emitted_anim_ranges)
+                print(
+                    "[debug] "
+                    f"tile={tile} png={'yes' if png_path.exists() else 'no'} "
+                    f"tilefromtexture={'yes' if tile in written_tiles else 'no'} "
+                    f"animtype={anim_info['type']} animframes={anim_info['frames']} animspeed={anim_info['speed']} "
+                    f"animrange={anim_info['first']}..{anim_info['last']} "
+                    f"covered_by_animtilerange={'yes' if covered_by_emitted_range else 'no'}"
+                )
+
     # Step 3: repack GRP. ART files are included for --onlysmaller or selective tile-file processing.
     patterns = [
         "*.VOC", "*.voc",
@@ -805,6 +897,13 @@ def main():
     if not files:
         print("No files found to pack.")
         return 1
+
+    has_art_files_in_pack = any(f.suffix.lower() == ".art" for f in files)
+    if not has_art_files_in_pack and emitted_anim_defs == 0:
+        print(
+            "[warn] Packing without ART files and without animtilerange entries. "
+            "Animated tiles may render as first frame only."
+        )
 
     output_path = (work_dir / args.output).resolve()
     run([str(kgroup), str(output_path)] + [str(p) for p in files], cwd=temp_dir)
