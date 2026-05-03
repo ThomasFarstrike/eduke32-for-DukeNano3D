@@ -59,6 +59,64 @@ def parse_tilefiles_arg(value: str):
     return sorted(set(indices))
 
 
+def find_file_case_insensitive(base_dir: Path, name: str):
+    normalized = name.lower()
+
+    direct = base_dir / name
+    if direct.exists() and direct.is_file():
+        return direct
+
+    for candidate in base_dir.iterdir():
+        if candidate.is_file() and candidate.name.lower() == normalized:
+            return candidate
+
+    return None
+
+
+def parse_used_tiles_from_mapinfo_output(output: str):
+    section_match = re.search(r"=== COMBINED TILE USAGE ===(.*?)(?:\n=== |\Z)", output, flags=re.DOTALL)
+    section = section_match.group(1) if section_match else output
+
+    lines = section.splitlines()
+    used_tiles = set()
+    in_tiles = False
+
+    for line in lines:
+        if not in_tiles:
+            if re.search(r"used_tiles\s*\(\d+\)\s*:", line):
+                in_tiles = True
+                _, _, tail = line.partition(":")
+                used_tiles.update(int(v) for v in re.findall(r"\b\d+\b", tail))
+            continue
+
+        if line.strip() == "":
+            continue
+
+        # End when indentation style changes (next label/section).
+        if not line.startswith(" "):
+            break
+
+        used_tiles.update(int(v) for v in re.findall(r"\b\d+\b", line))
+
+    return used_tiles
+
+
+def tilefile_index_from_name(name: str):
+    match = re.match(r"^tiles(\d{3})\.art$", name, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def parse_includeart_arg(value: str):
+    name = Path(value).name
+    if not re.match(r"^tiles\d{3}\.art$", name, flags=re.IGNORECASE):
+        raise argparse.ArgumentTypeError(
+            f"Invalid ART filename '{value}'. Expected TILESNNN.ART, e.g. TILES012.ART"
+        )
+    return name.lower()
+
+
 def normalize_case_insensitive_options(argv, option_names):
     normalized = []
     lower_opts = {opt.lower(): opt for opt in option_names}
@@ -79,7 +137,7 @@ def normalize_case_insensitive_options(argv, option_names):
 
 
 def main():
-    normalized_argv = normalize_case_insensitive_options(sys.argv[1:], ["--pngfolder"])
+    normalized_argv = normalize_case_insensitive_options(sys.argv[1:], ["--pngfolder", "--map", "--includeart"])
 
     parser = argparse.ArgumentParser(description="Re-package Duke Nukem 3D GRP with PNG tiles and duke3d.def")
     parser.add_argument("grpfile", help="Path to .grp file to compact")
@@ -113,9 +171,22 @@ def main():
         metavar="DIRNAME",
         help="Use pre-generated TILE####.PNG files from DIRNAME instead of exporting/converting from ART files",
     )
+    parser.add_argument(
+        "--map",
+        metavar="MAPNAME",
+        help="Limit tile processing to tiles used by MAPNAME (case-insensitive) using mapinfo",
+    )
+    parser.add_argument(
+        "--includeart",
+        metavar="FILE.ART",
+        action="append",
+        type=parse_includeart_arg,
+        help="Force-include FILE.ART from extracted temp folder (repeatable, e.g. --includeart TILES012.ART)",
+    )
     args = parser.parse_args(normalized_argv)
 
     selected_tile_files = set(args.tilefilestopng or [])
+    included_art_files = set(args.includeart or [])
 
     work_dir = Path.cwd().resolve()
     script_dir = Path(__file__).resolve().parent
@@ -138,6 +209,9 @@ def main():
     kextract = find_tool(script_dir, "kextract")
     kgroup = find_tool(script_dir, "kgroup")
     arttool = find_tool(script_dir, "arttool")
+    mapinfo = None
+    if args.map:
+        mapinfo = find_tool(script_dir, "mapinfo")
     convert = None
     if not args.pngfolder:
         convert = shutil.which("convert")
@@ -183,6 +257,30 @@ def main():
     # Step 1: extract GRP into temp_dir
     run([str(kextract), str(grp_path), "*"], cwd=temp_dir)
 
+    required_tiles = None
+    if args.map:
+        map_file = find_file_case_insensitive(temp_dir, args.map)
+        if map_file is None:
+            print(f"Map file not found in extracted GRP (case-insensitive): {args.map}")
+            return 1
+
+        mapinfo_proc = subprocess.run(
+            [str(mapinfo), str(map_file)],
+            cwd=temp_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        mapinfo_output = (mapinfo_proc.stdout or "") + "\n" + (mapinfo_proc.stderr or "")
+        if mapinfo_proc.returncode != 0:
+            print(f"[error] mapinfo failed for map {map_file.name}; aborting")
+            if mapinfo_output.strip():
+                print(mapinfo_output)
+            return 1
+
+        required_tiles = parse_used_tiles_from_mapinfo_output(mapinfo_output)
+        print(f"[info] --map {map_file.name}: restricting to {len(required_tiles)} used tiles")
+
     # arttool expects lowercase tilesXXX.art filenames for files we process.
     if selected_tile_files:
         for tile_file_index in sorted(selected_tile_files):
@@ -222,6 +320,8 @@ def main():
 
             for tile_nr in range(256):
                 global_tile = tile_index * 256 + tile_nr
+                if required_tiles is not None and global_tile not in required_tiles:
+                    continue
                 global_padded = f"{global_tile:04d}"
 
                 local_pcx = temp_dir / f"tile{global_padded}.pcx"
@@ -354,15 +454,35 @@ def main():
         "duke3d.def",
         "*.MID", "*.mid",
     ]
-    if args.onlysmaller or selected_tile_files:
+    if args.onlysmaller or selected_tile_files or included_art_files:
         patterns.extend(["*.ART", "*.art"])
 
     files = collect_files(temp_dir, patterns)
 
+    if included_art_files:
+        files = [
+            f for f in files
+            if f.suffix.lower() != ".art"
+            or f.name.lower() in included_art_files
+        ]
+
+    if required_tiles is not None:
+        needed_art_indices = {tile // 256 for tile in required_tiles}
+        files = [
+            f for f in files
+            if f.suffix.lower() != ".art"
+            or tilefile_index_from_name(f.name) in needed_art_indices
+            or f.name.lower() in included_art_files
+        ]
+
     if selected_tile_files and not args.onlysmaller:
         selected_processed = {f"tiles{idx:03d}.art" for idx in selected_tile_files}
         selected_processed.update({f"TILES{idx:03d}.ART" for idx in selected_tile_files})
-        files = [f for f in files if f.name not in selected_processed]
+        files = [
+            f for f in files
+            if f.name not in selected_processed
+            or f.name.lower() in included_art_files
+        ]
 
     # de-duplicate while preserving order
     files = list(dict.fromkeys(files))
