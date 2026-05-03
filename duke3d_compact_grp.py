@@ -242,6 +242,16 @@ def build_ultra_minimal_menu_allowlist():
         3281,             # LOADSCREEN
     })
 
+    # ---------- Startup screen overlays (easy to tweak) ----------
+    # These are required for the boot/title startup sequence and its logo overlays.
+    STARTUP_SCREEN_TILES = {
+        2492,  # STARTUP_3D_REALMS_LOGO (TILE2492.PNG)
+        2493,  # STARTUP_DUKE_NUKEM_SCREEN (TILE2493.PNG)
+        2497,  # STARTUP_LOGO_OVERLAY_A (TILE2497.PNG)
+        2498,  # STARTUP_LOGO_OVERLAY_B (TILE2498.PNG)
+    }
+    allow.update(STARTUP_SCREEN_TILES)
+
     # ---------- Player HUD and first-person weapon tiles ----------
     allow.add(2523)                   # CROSSHAIR
 
