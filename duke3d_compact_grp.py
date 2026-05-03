@@ -76,6 +76,16 @@ def main():
         action="store_true",
         help="Only replace tiles when PNG is smaller than raw tile data; keeps ART files in output",
     )
+    parser.add_argument(
+        "--optipng",
+        action="store_true",
+        help="Run optipng -o7 on each generated PNG",
+    )
+    parser.add_argument(
+        "--zopflipng",
+        action="store_true",
+        help="Run zopflipng with fixed high-compression settings on each generated PNG",
+    )
     args = parser.parse_args()
 
     selected_tile_files = set(args.tilefilestopng or [])
@@ -104,6 +114,20 @@ def main():
     convert = shutil.which("convert")
     if not convert:
         raise FileNotFoundError("Required tool 'convert' (ImageMagick) not found in PATH")
+
+    optipng = None
+    if args.optipng:
+        optipng = shutil.which("optipng")
+        if not optipng:
+            raise FileNotFoundError("Requested --optipng but tool 'optipng' was not found in PATH")
+
+    zopflipng = None
+    if args.zopflipng:
+        zopflipng = Path("/home/user/software/zopfli/zopflipng")
+        if not (zopflipng.exists() and os.access(zopflipng, os.X_OK)):
+            raise FileNotFoundError(
+                "Requested --zopflipng but '/home/user/software/zopfli/zopflipng' was not found or is not executable"
+            )
 
     # Step 1: extract GRP into temp_dir
     run([str(kextract), str(grp_path), "*"], cwd=temp_dir)
@@ -195,6 +219,47 @@ def main():
                     if out_png.exists():
                         out_png.unlink()
                     return 1
+
+                if args.optipng:
+                    optipng_proc = subprocess.run(
+                        [optipng, "-o7", str(out_png)],
+                        cwd=temp_dir,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if optipng_proc.returncode != 0:
+                        print(f"[error] optipng failed for tile {global_tile}; aborting")
+                        if optipng_proc.stdout:
+                            print(optipng_proc.stdout)
+                        if optipng_proc.stderr:
+                            print(optipng_proc.stderr)
+                        return 1
+
+                if args.zopflipng:
+                    zopflipng_proc = subprocess.run(
+                        [
+                            str(zopflipng),
+                            "--iterations=500",
+                            "--filters=01234mepb",
+                            "--lossy_8bit",
+                            "--lossy_transparent",
+                            "-y",
+                            str(out_png),
+                            str(out_png),
+                        ],
+                        cwd=temp_dir,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if zopflipng_proc.returncode != 0:
+                        print(f"[error] zopflipng failed for tile {global_tile}; aborting")
+                        if zopflipng_proc.stdout:
+                            print(zopflipng_proc.stdout)
+                        if zopflipng_proc.stderr:
+                            print(zopflipng_proc.stderr)
+                        return 1
 
                 raw_size = get_tile_raw_size(arttool, temp_dir, global_tile)
                 png_size = out_png.stat().st_size
