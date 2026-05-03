@@ -86,6 +86,32 @@ def get_tile_anim_range(arttool: Path, cwd: Path, tile_num: int):
     return info["first"], info["last"]
 
 
+def _decode_art_offset(value: int) -> int:
+    # ART stores offsets as signed int8. Some arttool builds print those
+    # bytes as unsigned 0..255 in "info" output, so convert if needed.
+    if value > 127:
+        return value - 256
+    return value
+
+
+def get_tile_offsets(arttool: Path, cwd: Path, tile_num: int):
+    proc = subprocess.run(
+        [str(arttool), "info", str(tile_num)],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    match = re.search(r"Xofs:\s*(-?\d+),\s*Yofs:\s*(-?\d+)", output)
+    if not match:
+        return 0, 0
+
+    raw_x = int(match.group(1))
+    raw_y = int(match.group(2))
+    return _decode_art_offset(raw_x), _decode_art_offset(raw_y)
+
+
 def expand_required_tiles_with_animation_frames(arttool: Path, cwd: Path, required_tiles):
     expanded = set(required_tiles)
 
@@ -801,7 +827,13 @@ def main():
                             text=True,
                         )
                         if rm_proc.returncode == 0:
-                            duke_def.write(f"tilefromtexture {global_tile} {{ file {out_png.name} }}\n")
+                            xofs, yofs = get_tile_offsets(arttool, temp_dir, global_tile)
+                            if xofs == 0 and yofs == 0:
+                                duke_def.write(f"tilefromtexture {global_tile} {{ file {out_png.name} }}\n")
+                            else:
+                                duke_def.write(
+                                    f"tilefromtexture {global_tile} {{ file {out_png.name} xoffset {xofs} yoffset {yofs} }}\n"
+                                )
                             written_tiles.add(global_tile)
                         else:
                             print(f"[warn] rmtile failed for tile {global_tile}, keeping ART tile")
@@ -810,7 +842,13 @@ def main():
                         out_png.unlink()
                 else:
                     # In normal mode, keep ART as-is and override via DEF only.
-                    duke_def.write(f"tilefromtexture {global_tile} {{ file {out_png.name} }}\n")
+                    xofs, yofs = get_tile_offsets(arttool, temp_dir, global_tile)
+                    if xofs == 0 and yofs == 0:
+                        duke_def.write(f"tilefromtexture {global_tile} {{ file {out_png.name} }}\n")
+                    else:
+                        duke_def.write(
+                            f"tilefromtexture {global_tile} {{ file {out_png.name} xoffset {xofs} yoffset {yofs} }}\n"
+                        )
                     written_tiles.add(global_tile)
 
                 if global_tile in written_tiles and global_tile not in anim_def_candidates:
