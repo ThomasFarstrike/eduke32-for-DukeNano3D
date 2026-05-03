@@ -181,22 +181,24 @@ def normalize_case_insensitive_options(argv, option_names):
 
 def build_ultra_minimal_menu_allowlist():
     """
-    Tile allowlist derived from EDuke32 menu/precache code paths:
-      - source/duke3d/src/premap.cpp: cacheDukeTiles()
-      - source/duke3d/src/menus.cpp: direct rotatesprite_fs/menu references
+    Runtime baseline tile allowlist for `--map` builds.
 
-    Intentionally includes only menu/UI-critical ranges and explicit menu screens,
-    not full gameplay precache ranges.
+    Source of truth is EDuke32 startup/hud/precache code paths, primarily:
+      - source/duke3d/src/premap.cpp: cacheDukeTiles()
+      - source/duke3d/src/screens.cpp / menus.cpp: crosshair + menu screens
+
+    Goal: keep the set minimal while still including non-map runtime essentials
+    (HUD weapon tiles, projectiles/effects, fonts/menu screens, crosshair).
     """
     allow = set()
 
-    # premap.cpp cacheDukeTiles()
+    # ---------- Menu and font/UI infrastructure ----------
     allow.update(range(2456, 2491))   # MENUSCREEN .. DUKECAR-1
     allow.update(range(2822, 2916))   # STARTALPHANUM .. ENDALPHANUM
     allow.update(range(2929, 3022))   # BIGALPHANUM-11 .. BIGALPHANUM+81
     allow.update(range(3072, 3165))   # MINIFONT .. MINIFONT+92
 
-    # menus.cpp explicit menu/background draws
+    # Explicit menu screens drawn outside broad menu ranges.
     allow.update({
         2445,             # F1HELP
         2499,             # INGAMEDUKETHREEDEE
@@ -206,6 +208,66 @@ def build_ultra_minimal_menu_allowlist():
         3280,             # TEXTSTORY
         3281,             # LOADSCREEN
     })
+
+    # ---------- Player HUD and first-person weapon tiles ----------
+    allow.add(2523)                   # CROSSHAIR
+
+    # Pistol (requested missing range): FIRSTGUN .. FIRSTGUN+6
+    allow.update(range(2524, 2531))   # includes FIRSTGUN and reload sequence
+
+    # Pistol ejected shells
+    allow.update(range(2533, 2535))   # SHELL .. SHELL+1
+
+    # Chaingun view weapon tiles
+    allow.update(range(2536, 2544))   # CHAINGUN .. CHAINGUN+7
+
+    # RPG view weapon tiles
+    allow.update(range(2544, 2547))   # RPGGUN .. RPGGUN+2
+
+    # Freeze cannon view weapon tiles
+    allow.update(range(2548, 2554))   # FREEZE .. FREEZE+5
+
+    # Shrinker/Expander view weapon + crystal frames
+    allow.update(range(2554, 2562))   # SHRINKER-2 .. SHRINKER+5
+
+    # Tripbomb/remote hand sequences
+    allow.update(range(2563, 2568))   # HANDHOLDINGLASER .. HANDHOLDINGLASER+4
+    allow.update(range(2570, 2576))   # HANDREMOTE .. HANDREMOTE+5
+
+    # Shotgun view weapon tiles
+    allow.update(range(2613, 2620))   # SHOTGUN .. SHOTGUN+6
+
+    # Devastator left/right weapon tiles
+    allow.update(range(2510, 2512))   # DEVISTATOR .. DEVISTATOR+1
+
+    # ---------- Core projectile/FX tiles preloaded by cacheDukeTiles() ----------
+    allow.update(range(0, 61))        # startup baseline tiles 0..60
+
+    allow.update(range(550, 553))     # FOOTPRINTS .. FOOTPRINTS+2
+    allow.update(range(1261, 1267))   # TRANSPORTERBEAM .. +5
+    allow.update(range(1360, 1381))   # COOLEXPLOSION1 .. +20
+
+    allow.update(range(1620, 1624))   # BLOOD .. +3
+    allow.add(1625)                   # FIRELASER
+    allow.update(range(1641, 1644))   # FREEZEBLAST .. +2
+    allow.update(range(1646, 1650))   # SHRINKSPARK .. +3
+    allow.update(range(1650, 1654))   # MORTER .. +3
+    allow.update(range(1656, 1660))   # SHRINKEREXPLOSION .. +3
+
+    allow.update(range(1890, 1911))   # EXPLOSION2 .. +20
+
+    allow.update(range(2245, 2270))   # JIBS1 .. JIBS5+4
+    allow.update(range(2270, 2284))   # BURNING .. +13
+    allow.update(range(2286, 2294))   # JIBS6 .. +7
+    allow.update(range(2310, 2324))   # BURNING2 .. +13
+    allow.update(range(2324, 2328))   # CRACKKNUCKLES .. +3
+    allow.update(range(2329, 2333))   # SMALLSMOKE .. +3
+
+    allow.update(range(2400, 2429))   # SCRAP1 .. +28
+    allow.update(range(2448, 2452))   # GROWSPARK .. +3
+
+    allow.update(range(2595, 2599))   # SHOTSPARK1 .. +3
+    allow.update(range(2605, 2612))   # RPG .. RPG+6
 
     return allow
 
@@ -264,9 +326,9 @@ def main():
         "--ultraminimalmenu",
         action="store_true",
         help=(
-            "Include an ultra-minimal menu/UI tile allowlist derived from "
-            "source/duke3d/src/premap.cpp + source/duke3d/src/menus.cpp. "
-            "Useful with --map to keep startup/menu tiles without bundling full ART files."
+            "Include a runtime baseline tile allowlist for --map builds, derived from "
+            "source/duke3d/src/premap.cpp + HUD/menu draw code. "
+            "Adds non-map essentials like crosshair, weapon HUD tiles and core FX/projectile tiles."
         ),
     )
 
