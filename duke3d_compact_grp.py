@@ -194,6 +194,8 @@ def build_ultra_minimal_menu_allowlist():
 
     # ---------- Menu and font/UI infrastructure ----------
     allow.update(range(2456, 2491))   # MENUSCREEN .. DUKECAR-1
+    allow.update(range(2813, 2820))   # SPINNINGNUKEICON .. SPINNINGNUKEICON+6
+    allow.update({2820, 2821})        # BIGFNTCURSOR / SMALLFNTCURSOR
     allow.update(range(2822, 2916))   # STARTALPHANUM .. ENDALPHANUM
     allow.update(range(2929, 3022))   # BIGALPHANUM-11 .. BIGALPHANUM+81
     allow.update(range(3072, 3165))   # MINIFONT .. MINIFONT+92
@@ -363,6 +365,36 @@ def expand_required_tiles_with_enemy_runtime_ranges(required_tiles):
     return expanded
 
 
+def expand_required_tiles_with_runtime_state_tiles(required_tiles):
+    """
+    Expand map-derived tiles with explicit runtime state-transition tiles.
+
+    These are non-PICANM transitions where game code switches picnum to a
+    different tile at runtime (not a contiguous animation declared in ART).
+    """
+    expanded = set(required_tiles)
+
+    runtime_state_groups = [
+        {
+            "name": "Fan sprite broken states",
+            "triggers": {407, 412},          # FANSPRITE / FANSHADOW
+            "tiles": {411, 416},             # FANSPRITEBROKE / FANSHADOWBROKE
+        },
+        {
+            "name": "Nuke button punch sequence",
+            "triggers": {142},               # NUKEBUTTON
+            "tiles": {143, 144, 145},        # NUKEBUTTON+1..+3
+        },
+    ]
+
+    for group in runtime_state_groups:
+        if not (expanded & group["triggers"]):
+            continue
+        expanded.update(group["tiles"])
+
+    return expanded
+
+
 def main():
     normalized_argv = normalize_case_insensitive_options(
         sys.argv[1:],
@@ -497,6 +529,11 @@ def main():
     # Step 1: extract GRP into temp_dir
     run([str(kextract), str(grp_path), "*"], cwd=temp_dir)
 
+    # arttool expects lowercase tiles*.art names; normalize early so
+    # --map animation expansion (arttool info) can resolve tile metadata.
+    for art_file in temp_dir.glob("TILES*.ART"):
+        art_file.rename(temp_dir / art_file.name.lower())
+
     required_tiles = None
     if args.map:
         map_file = find_file_case_insensitive(temp_dir, args.map)
@@ -536,6 +573,16 @@ def main():
             required_tiles = enemy_expanded_tiles
             print(
                 f"[info] --map {map_file.name}: added {enemy_added_tiles} enemy runtime-frame tiles "
+                f"(total now {len(required_tiles)})"
+            )
+
+    if required_tiles is not None:
+        runtime_state_tiles = expand_required_tiles_with_runtime_state_tiles(required_tiles)
+        runtime_state_added = len(runtime_state_tiles) - len(required_tiles)
+        if runtime_state_added > 0:
+            required_tiles = runtime_state_tiles
+            print(
+                f"[info] --map {map_file.name}: added {runtime_state_added} runtime state-transition tiles "
                 f"(total now {len(required_tiles)})"
             )
 
