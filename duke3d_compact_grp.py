@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import re
 import subprocess
+import sys
 
 def run(cmd, cwd, check=True):
     print(f"[run] {cmd} (cwd={cwd})")
@@ -58,7 +59,28 @@ def parse_tilefiles_arg(value: str):
     return sorted(set(indices))
 
 
+def normalize_case_insensitive_options(argv, option_names):
+    normalized = []
+    lower_opts = {opt.lower(): opt for opt in option_names}
+
+    for arg in argv:
+        if not arg.startswith("--"):
+            normalized.append(arg)
+            continue
+
+        key, sep, value = arg.partition("=")
+        canonical = lower_opts.get(key.lower())
+        if canonical:
+            normalized.append(f"{canonical}{sep}{value}" if sep else canonical)
+        else:
+            normalized.append(arg)
+
+    return normalized
+
+
 def main():
+    normalized_argv = normalize_case_insensitive_options(sys.argv[1:], ["--pngfolder"])
+
     parser = argparse.ArgumentParser(description="Re-package Duke Nukem 3D GRP with PNG tiles and duke3d.def")
     parser.add_argument("grpfile", help="Path to .grp file to compact")
     parser.add_argument("--temp-dir", default="temp_folder", help="Temporary working directory")
@@ -86,7 +108,12 @@ def main():
         action="store_true",
         help="Run zopflipng with fixed high-compression settings on each generated PNG",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--pngfolder",
+        metavar="DIRNAME",
+        help="Use pre-generated TILE####.PNG files from DIRNAME instead of exporting/converting from ART files",
+    )
+    args = parser.parse_args(normalized_argv)
 
     selected_tile_files = set(args.tilefilestopng or [])
 
@@ -111,23 +138,47 @@ def main():
     kextract = find_tool(script_dir, "kextract")
     kgroup = find_tool(script_dir, "kgroup")
     arttool = find_tool(script_dir, "arttool")
-    convert = shutil.which("convert")
-    if not convert:
-        raise FileNotFoundError("Required tool 'convert' (ImageMagick) not found in PATH")
+    convert = None
+    if not args.pngfolder:
+        convert = shutil.which("convert")
+        if not convert:
+            raise FileNotFoundError("Required tool 'convert' (ImageMagick) not found in PATH")
 
     optipng = None
-    if args.optipng:
+    if args.optipng and not args.pngfolder:
         optipng = shutil.which("optipng")
         if not optipng:
             raise FileNotFoundError("Requested --optipng but tool 'optipng' was not found in PATH")
 
     zopflipng = None
-    if args.zopflipng:
+    if args.zopflipng and not args.pngfolder:
         zopflipng = Path("/home/user/software/zopfli/zopflipng")
         if not (zopflipng.exists() and os.access(zopflipng, os.X_OK)):
             raise FileNotFoundError(
                 "Requested --zopflipng but '/home/user/software/zopfli/zopflipng' was not found or is not executable"
             )
+
+    if args.pngfolder and (args.optipng or args.zopflipng):
+        print("[info] --pngfolder was provided: skipping --optipng/--zopflipng and using precomputed PNGs as-is")
+
+    png_sources = {}
+    if args.pngfolder:
+        png_dir = Path(args.pngfolder)
+        if not png_dir.is_absolute():
+            png_dir = (work_dir / png_dir).resolve()
+
+        if not png_dir.exists() or not png_dir.is_dir():
+            print(f"PNG folder not found or not a directory: {png_dir}")
+            return 1
+
+        for png_file in sorted(png_dir.iterdir()):
+            if not png_file.is_file():
+                continue
+            match = re.match(r"^tile(\d{4})\.png$", png_file.name, flags=re.IGNORECASE)
+            if not match:
+                continue
+            tile_num = int(match.group(1))
+            png_sources[tile_num] = png_file
 
     # Step 1: extract GRP into temp_dir
     run([str(kextract), str(grp_path), "*"], cwd=temp_dir)
@@ -177,50 +228,56 @@ def main():
                 if local_pcx.exists():
                     local_pcx.unlink()
 
-                export_proc = subprocess.run(
-                    [str(arttool), "exporttile", str(global_tile)],
-                    cwd=temp_dir,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                #if export_proc.returncode != 0:
-                #    if local_pcx.exists():
-                #        local_pcx.unlink()
-                #    continue
-
-                if not local_pcx.exists():
-                    continue
-
                 out_png = temp_dir / f"TILE{global_padded}.PNG"
                 if out_png.exists():
                     out_png.unlink()
 
-                convert_proc = subprocess.run([
-                    convert,
-                    str(local_pcx),
-                    #"-alpha", "off",
-                    "-alpha", "on",
-                    "-transparent", "#FC00FC",
-                    "-strip",
-                    "-define", "png:compression-level=9",
-                    "-define", "png:compression-strategy=1",
-                    "-define", "png:exclude-chunks=date,time",
-                    "-colors", "256",
-                    f"PNG8:{out_png}",
-                ], cwd=temp_dir, check=False, capture_output=True, text=True)
+                if args.pngfolder:
+                    source_png = png_sources.get(global_tile)
+                    if not source_png:
+                        continue
+                    shutil.copy2(source_png, out_png)
+                else:
+                    export_proc = subprocess.run(
+                        [str(arttool), "exporttile", str(global_tile)],
+                        cwd=temp_dir,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    #if export_proc.returncode != 0:
+                    #    if local_pcx.exists():
+                    #        local_pcx.unlink()
+                    #    continue
 
-                if convert_proc.returncode != 0 or not out_png.exists():
-                    print(f"[error] convert failed for tile {global_tile}; aborting")
-                    if convert_proc.stdout:
-                        print(convert_proc.stdout)
-                    if convert_proc.stderr:
-                        print(convert_proc.stderr)
-                    if out_png.exists():
-                        out_png.unlink()
-                    return 1
+                    if not local_pcx.exists():
+                        continue
 
-                if args.optipng:
+                    convert_proc = subprocess.run([
+                        convert,
+                        str(local_pcx),
+                        #"-alpha", "off",
+                        "-alpha", "on",
+                        "-transparent", "#FC00FC",
+                        "-strip",
+                        "-define", "png:compression-level=9",
+                        "-define", "png:compression-strategy=1",
+                        "-define", "png:exclude-chunks=date,time",
+                        "-colors", "256",
+                        f"PNG8:{out_png}",
+                    ], cwd=temp_dir, check=False, capture_output=True, text=True)
+
+                    if convert_proc.returncode != 0 or not out_png.exists():
+                        print(f"[error] convert failed for tile {global_tile}; aborting")
+                        if convert_proc.stdout:
+                            print(convert_proc.stdout)
+                        if convert_proc.stderr:
+                            print(convert_proc.stderr)
+                        if out_png.exists():
+                            out_png.unlink()
+                        return 1
+
+                if args.optipng and not args.pngfolder:
                     optipng_proc = subprocess.run(
                         [optipng, "-o7", str(out_png)],
                         cwd=temp_dir,
@@ -236,7 +293,7 @@ def main():
                             print(optipng_proc.stderr)
                         return 1
 
-                if args.zopflipng:
+                if args.zopflipng and not args.pngfolder:
                     zopflipng_proc = subprocess.run(
                         [
                             str(zopflipng),
