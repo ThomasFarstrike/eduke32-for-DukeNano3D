@@ -217,6 +217,91 @@ def parse_includeart_arg(value: str):
     return name.lower()
 
 
+def parse_excludefiles_arg(value: str):
+    parts = [Path(p.strip()).name for p in value.split(",") if p.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError(
+            "Expected comma-separated filenames, e.g. TILES3280.PNG,TILES3281.PNG"
+        )
+    return [p.lower() for p in parts]
+
+
+def strip_con_line_comment(line: str):
+    return line.split("//", 1)[0].rstrip("\n")
+
+
+def determine_required_mid_files_from_user_con(temp_dir: Path, selected_map_name: str):
+    user_con = find_file_case_insensitive(temp_dir, "USER.CON")
+    if user_con is None:
+        print("[warn] USER.CON not found; keeping all music files")
+        return None
+
+    map_to_slot = {}
+    music_by_volume = {}
+
+    current_music_volume = None
+
+    with user_con.open("r", encoding="utf-8", errors="replace") as fh:
+        for raw_line in fh:
+            uncommented = strip_con_line_comment(raw_line)
+            stripped = uncommented.strip()
+
+            if not stripped:
+                continue
+
+            tokens = stripped.split()
+            if not tokens:
+                continue
+
+            keyword = tokens[0].lower()
+
+            if keyword == "definelevelname":
+                current_music_volume = None
+                if len(tokens) >= 4 and tokens[1].isdigit() and tokens[2].isdigit():
+                    volume = int(tokens[1])
+                    level = int(tokens[2])
+                    map_name = Path(tokens[3]).name.lower()
+                    map_to_slot[map_name] = (volume, level)
+                continue
+
+            if keyword == "music":
+                current_music_volume = None
+                if len(tokens) >= 2 and tokens[1].isdigit():
+                    current_music_volume = int(tokens[1])
+                    track_tokens = [Path(t).name.lower() for t in tokens[2:]]
+                    music_by_volume.setdefault(current_music_volume, []).extend(track_tokens)
+                continue
+
+            if current_music_volume is not None and raw_line[:1].isspace():
+                track_tokens = [Path(t).name.lower() for t in tokens]
+                music_by_volume.setdefault(current_music_volume, []).extend(track_tokens)
+                continue
+
+            current_music_volume = None
+
+    required = set(music_by_volume.get(0, []))
+
+    slot = map_to_slot.get(selected_map_name.lower())
+    if slot is None:
+        print(
+            f"[warn] Map {selected_map_name} not found in USER.CON definelevelname list; "
+            "including only title/end music"
+        )
+        return required
+
+    volume, level = slot
+    volume_tracks = music_by_volume.get(volume, [])
+    if level < len(volume_tracks):
+        required.add(volume_tracks[level])
+    else:
+        print(
+            f"[warn] No music track for volume {volume} level {level} in USER.CON; "
+            "including only title/end music"
+        )
+
+    return required
+
+
 def normalize_case_insensitive_options(argv, option_names):
     normalized = []
     lower_opts = {opt.lower(): opt for opt in option_names}
@@ -465,7 +550,7 @@ def expand_required_tiles_with_runtime_state_tiles(required_tiles):
 def main():
     normalized_argv = normalize_case_insensitive_options(
         sys.argv[1:],
-        ["--pngfolder", "--map", "--includeart", "--ultraminimalmenu"],
+        ["--pngfolder", "--map", "--includeart", "--ultraminimalmenu", "--excludefiles"],
     )
 
     parser = argparse.ArgumentParser(description="Re-package Duke Nukem 3D GRP with PNG tiles and duke3d.def")
@@ -522,6 +607,13 @@ def main():
         ),
     )
     parser.add_argument(
+        "--excludefiles",
+        metavar="FILE1,FILE2,...",
+        action="append",
+        type=parse_excludefiles_arg,
+        help="Exclude one or more filenames from the final GRP (comma-separated, repeatable), e.g. --excludefiles TILES3280.PNG",
+    )
+    parser.add_argument(
         "--debug-tiles",
         metavar="TILE1,TILE2,...",
         type=parse_tile_numbers_arg,
@@ -535,6 +627,11 @@ def main():
 
     selected_tile_files = set(args.tilefilestopng or [])
     included_art_files = set(args.includeart or [])
+    excluded_files = {
+        name
+        for group in (args.excludefiles or [])
+        for name in group
+    }
 
     work_dir = Path.cwd().resolve()
     script_dir = Path(__file__).resolve().parent
@@ -611,11 +708,15 @@ def main():
         art_file.rename(temp_dir / art_file.name.lower())
 
     required_tiles = None
+    required_mid_files = None
+    selected_map_name = None
     if args.map:
         map_file = find_file_case_insensitive(temp_dir, args.map)
         if map_file is None:
             print(f"Map file not found in extracted GRP (case-insensitive): {args.map}")
             return 1
+
+        selected_map_name = map_file.name.lower()
 
         mapinfo_proc = subprocess.run(
             [str(mapinfo), str(map_file)],
@@ -650,6 +751,13 @@ def main():
             print(
                 f"[info] --map {map_file.name}: added {enemy_added_tiles} enemy runtime-frame tiles "
                 f"(total now {len(required_tiles)})"
+            )
+
+        required_mid_files = determine_required_mid_files_from_user_con(temp_dir, selected_map_name)
+        if required_mid_files is not None:
+            print(
+                f"[info] --map {map_file.name}: including {len(required_mid_files)} music files "
+                "(title/end + selected map track)"
             )
 
     if required_tiles is not None:
@@ -921,6 +1029,9 @@ def main():
             or f.name.lower() in included_art_files
         ]
 
+    if excluded_files:
+        files = [f for f in files if f.name.lower() not in excluded_files]
+
     if required_tiles is not None:
         needed_art_indices = {tile // 256 for tile in required_tiles}
         files = [
@@ -928,6 +1039,20 @@ def main():
             if f.suffix.lower() != ".art"
             or tilefile_index_from_name(f.name) in needed_art_indices
             or f.name.lower() in included_art_files
+        ]
+
+    if selected_map_name is not None:
+        files = [
+            f for f in files
+            if f.suffix.lower() != ".map"
+            or f.name.lower() == selected_map_name
+        ]
+
+    if required_mid_files is not None:
+        files = [
+            f for f in files
+            if f.suffix.lower() != ".mid"
+            or f.name.lower() in required_mid_files
         ]
 
     if selected_tile_files and not args.onlysmaller:
