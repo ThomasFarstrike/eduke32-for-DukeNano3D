@@ -519,7 +519,7 @@ def build_ultra_minimal_menu_allowlist():
 
     # Tripbomb/remote hand sequences
     allow.update(range(2563, 2568))   # HANDHOLDINGLASER .. HANDHOLDINGLASER+4
-    allow.update(range(2570, 2576))   # HANDREMOTE .. HANDREMOTE+5
+    allow.update(range(2570, 2577))   # HANDREMOTE .. HANDREMOTE+6 (includes TILE2576)
 
     # Shotgun view weapon tiles
     allow.update(range(2613, 2620))   # SHOTGUN .. SHOTGUN+6
@@ -527,12 +527,18 @@ def build_ultra_minimal_menu_allowlist():
     # Devastator left/right weapon tiles
     allow.update(range(2510, 2512))   # DEVISTATOR .. DEVISTATOR+1
 
+    # Knee/quick-kick HUD sequence frequently needed in minimal packs
+    allow.update(range(2521, 2523))   # TILE2521 .. TILE2522
+
     # ---------- Core projectile/FX tiles preloaded by cacheDukeTiles() ----------
     allow.update(range(0, 61))        # startup baseline tiles 0..60
 
     allow.update(range(550, 553))     # FOOTPRINTS .. FOOTPRINTS+2
+    allow.update(range(1233, 1236))   # TILE1233 .. TILE1235 (runtime/map-adjacent effects)
     allow.update(range(1261, 1267))   # TRANSPORTERBEAM .. +5
+    allow.update(range(1332, 1334))   # TILE1332 .. TILE1333 (avoid fallback to TILE1330)
     allow.update(range(1360, 1381))   # COOLEXPLOSION1 .. +20
+    allow.update(range(1400, 1528))   # TILE1400 .. TILE1527 (reported missing runtime span)
 
     allow.update(range(1620, 1624))   # BLOOD .. +3
     allow.add(1625)                   # FIRELASER
@@ -1546,9 +1552,11 @@ def main():
             if len(missing_required_png_sources) > 24:
                 preview += ",..."
             print(
-                f"[warn] --pngfolder missing required TILE####.PNG files for "
+                f"[error] --pngfolder missing required TILE####.PNG files for "
                 f"{len(missing_required_png_sources)} tile(s): {preview}"
             )
+            print("[error] Aborting to avoid silently skipping required tiles.")
+            return 1
 
         emitted_anim_defs = 0
         skipped_anim_defs = 0
