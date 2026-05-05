@@ -477,6 +477,7 @@ def build_ultra_minimal_menu_allowlist():
 
     # Explicit menu screens drawn outside broad menu ranges.
     allow.update({
+        1141,             # menu background image (TILE1141.PNG)
         2445,             # F1HELP
         2499,             # INGAMEDUKETHREEDEE
         2503,             # PLUTOPAKSPRITE+2
