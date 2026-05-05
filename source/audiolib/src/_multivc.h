@@ -178,6 +178,8 @@ typedef struct VoiceNode
     int handle;
     int priority;
 
+    bool ownsRawData;
+
     async::task<int> task;
 } VoiceNode;
 

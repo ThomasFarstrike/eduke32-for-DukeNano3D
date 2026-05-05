@@ -30,6 +30,8 @@
 #include "pitch.h"
 #include "pragmas.h"
 
+#include <vector>
+
 static playbackstatus MV_GetNextWAVBlock(VoiceNode *voice)
 {
     if (voice->BlockLength == 0)
@@ -324,6 +326,156 @@ static playbackstatus MV_GetNextRAWBlock(VoiceNode *voice)
     return KeepPlaying;
 }
 
+static inline uint16_t MV_ReadLE16(uint8_t const *p)
+{
+    return (uint16_t)(p[0] | (p[1] << 8));
+}
+
+static inline uint32_t MV_ReadLE32(uint8_t const *p)
+{
+    return (uint32_t)(p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24));
+}
+
+static int MV_DecodeIMAADPCMNibble(int predictor, int &index, int nibble)
+{
+    static int const indexTable[16] =
+    {
+        -1, -1, -1, -1, 2, 4, 6, 8,
+        -1, -1, -1, -1, 2, 4, 6, 8,
+    };
+
+    static int const stepTable[89] =
+    {
+          7,     8,     9,    10,    11,    12,    13,    14,
+         16,    17,    19,    21,    23,    25,    28,    31,
+         34,    37,    41,    45,    50,    55,    60,    66,
+         73,    80,    88,    97,   107,   118,   130,   143,
+        157,   173,   190,   209,   230,   253,   279,   307,
+        337,   371,   408,   449,   494,   544,   598,   658,
+        724,   796,   876,   963,  1060,  1166,  1282,  1411,
+       1552,  1707,  1878,  2066,  2272,  2499,  2749,  3024,
+       3327,  3660,  4026,  4428,  4871,  5358,  5894,  6484,
+       7132,  7845,  8630,  9493, 10442, 11487, 12635, 13899,
+      15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+      32767,
+    };
+
+    int const step = stepTable[index];
+    int delta = step >> 3;
+
+    if (nibble & 1) delta += step >> 2;
+    if (nibble & 2) delta += step >> 1;
+    if (nibble & 4) delta += step;
+
+    predictor += (nibble & 8) ? -delta : delta;
+    predictor = clamp(predictor, INT16_MIN, INT16_MAX);
+
+    index += indexTable[nibble & 15];
+    index = clamp(index, 0, 88);
+
+    return predictor;
+}
+
+static bool MV_DecodeWAVIMAADPCM(uint8_t const *dataPtr, uint32_t dataSize, int channels, int blockAlign,
+                                 int samplesPerBlock, std::vector<int16_t> &decoded)
+{
+    if ((channels != 1 && channels != 2) || blockAlign <= 0 || dataSize == 0)
+        return false;
+
+    if ((dataSize % (uint32_t)blockAlign) != 0)
+        return false;
+
+    uint32_t offset = 0;
+
+    while (offset < dataSize)
+    {
+        uint8_t const *block = dataPtr + offset;
+        uint32_t const blockSize = (uint32_t)blockAlign;
+        int const headerSize = 4 * channels;
+
+        if (blockSize < (uint32_t)headerSize)
+            return false;
+
+        int predictor[2] = { 0, 0 };
+        int index[2] = { 0, 0 };
+
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            uint8_t const *hdr = block + (ch * 4);
+            predictor[ch] = (int)(int16_t)MV_ReadLE16(hdr);
+            index[ch] = (int)hdr[2];
+
+            if (index[ch] > 88)
+                return false;
+        }
+
+        int const derivedSamplesPerBlock = 1 + ((int)blockSize - headerSize) * 2 / channels;
+        if (derivedSamplesPerBlock <= 0)
+            return false;
+
+        int const blockSamplesPerChannel = (samplesPerBlock > 0) ? min(samplesPerBlock, derivedSamplesPerBlock) : derivedSamplesPerBlock;
+        if (blockSamplesPerChannel <= 0)
+            return false;
+
+        for (int ch = 0; ch < channels; ++ch)
+            decoded.push_back((int16_t)predictor[ch]);
+
+        int remaining = blockSamplesPerChannel - 1;
+        uint8_t const *src = block + headerSize;
+        uint8_t const *srcEnd = block + blockSize;
+
+        if (channels == 1)
+        {
+            while (remaining > 0)
+            {
+                if (src >= srcEnd)
+                    return false;
+
+                uint8_t const byte = *src++;
+                predictor[0] = MV_DecodeIMAADPCMNibble(predictor[0], index[0], byte & 0x0f);
+                decoded.push_back((int16_t)predictor[0]);
+                if (--remaining <= 0)
+                    break;
+
+                predictor[0] = MV_DecodeIMAADPCMNibble(predictor[0], index[0], byte >> 4);
+                decoded.push_back((int16_t)predictor[0]);
+                --remaining;
+            }
+        }
+        else
+        {
+            while (remaining > 0)
+            {
+                if (src + 8 > srcEnd)
+                    return false;
+
+                uint8_t chBytes[2][4];
+                memcpy(chBytes[0], src, 4);
+                memcpy(chBytes[1], src + 4, 4);
+                src += 8;
+
+                for (int i = 0; i < 8 && remaining > 0; ++i)
+                {
+                    for (int ch = 0; ch < 2; ++ch)
+                    {
+                        uint8_t const byte = chBytes[ch][i >> 1];
+                        int const nibble = (i & 1) ? (byte >> 4) : (byte & 0x0f);
+                        predictor[ch] = MV_DecodeIMAADPCMNibble(predictor[ch], index[ch], nibble);
+                    }
+
+                    decoded.push_back((int16_t)predictor[0]);
+                    decoded.push_back((int16_t)predictor[1]);
+                    --remaining;
+                }
+            }
+        }
+
+        offset += blockSize;
+    }
+
+    return true;
+}
+
 int MV_PlayWAV3D(char *ptr, uint32_t length, int loophow, int pitchoffset, int angle, int distance,
                      int priority, fix16_t volume, intptr_t callbackval)
 {
@@ -351,71 +503,148 @@ int MV_PlayWAV(char *ptr, uint32_t length, int loopstart, int loopend, int pitch
     if (!MV_Installed)
         return MV_Error;
 
-    riff_header   riff;
-    memcpy(&riff, ptr, sizeof(riff_header));
-    riff.file_size   = B_LITTLE32(riff.file_size);
-    riff.format_size = B_LITTLE32(riff.format_size);
-
-    if ((memcmp(riff.RIFF, "RIFF", 4) != 0) || (memcmp(riff.WAVE, "WAVE", 4) != 0) || (memcmp(riff.fmt, "fmt ", 4) != 0))
+    if (length < 12 || memcmp(ptr, "RIFF", 4) != 0 || memcmp(ptr + 8, "WAVE", 4) != 0)
         return MV_SetErrorCode(MV_InvalidFile);
 
-    format_header format;
-    memcpy(&format, ptr + sizeof(riff_header), sizeof(format_header));
-    format.wFormatTag      = B_LITTLE16(format.wFormatTag);
-    format.nChannels       = B_LITTLE16(format.nChannels);
-    format.nSamplesPerSec  = B_LITTLE32(format.nSamplesPerSec);
-    format.nAvgBytesPerSec = B_LITTLE32(format.nAvgBytesPerSec);
-    format.nBlockAlign     = B_LITTLE16(format.nBlockAlign);
-    format.nBitsPerSample  = B_LITTLE16(format.nBitsPerSample);
+    uint8_t const *wavData = (uint8_t const *)ptr;
+    uint8_t const *fmtData = nullptr;
+    uint32_t       fmtSize = 0;
+    uint8_t const *sampleData = nullptr;
+    uint32_t       sampleDataSize = 0;
 
-    data_header   data;
-    memcpy(&data, ptr + sizeof(riff_header) + riff.format_size, sizeof(data_header));
-    data.size = B_LITTLE32(data.size);
+    for (uint32_t offset = 12; offset + 8 <= length;)
+    {
+        uint8_t const *chunk = wavData + offset;
+        uint32_t const chunkSize = MV_ReadLE32(chunk + 4);
+        uint32_t const chunkDataOffset = offset + 8;
+        uint32_t const chunkPaddedSize = chunkSize + (chunkSize & 1);
 
-    // Check if it's PCM data.
-    if (format.wFormatTag != 1 || (format.nChannels != 1 && format.nChannels != 2) ||
-        ((format.nBitsPerSample != 8) && (format.nBitsPerSample != 16)) || memcmp(data.DATA, "data", 4) != 0)
+        if (chunkDataOffset > length || chunkSize > length - chunkDataOffset)
+            return MV_SetErrorCode(MV_InvalidFile);
+
+        if (memcmp(chunk, "fmt ", 4) == 0)
+        {
+            fmtData = chunk + 8;
+            fmtSize = chunkSize;
+        }
+        else if (memcmp(chunk, "data", 4) == 0)
+        {
+            sampleData = chunk + 8;
+            sampleDataSize = chunkSize;
+            break;
+        }
+
+        if (chunkDataOffset + chunkPaddedSize < chunkDataOffset)
+            return MV_SetErrorCode(MV_InvalidFile);
+
+        offset = chunkDataOffset + chunkPaddedSize;
+    }
+
+    if (fmtData == nullptr || fmtSize < 16 || sampleData == nullptr || sampleDataSize == 0)
         return MV_SetErrorCode(MV_InvalidFile);
 
-    // Request a voice from the voice pool
+    uint16_t const wFormatTag = MV_ReadLE16(fmtData + 0);
+    uint16_t const nChannels = MV_ReadLE16(fmtData + 2);
+    uint32_t const nSamplesPerSec = MV_ReadLE32(fmtData + 4);
+    uint16_t const nBlockAlign = MV_ReadLE16(fmtData + 12);
+    uint16_t const nBitsPerSample = MV_ReadLE16(fmtData + 14);
+
+    if (nChannels != 1 && nChannels != 2)
+        return MV_SetErrorCode(MV_InvalidFile);
+
+    int      wavBits = 0;
+    int      wavChannels = 0;
+    void *   rawDataPtr = nullptr;
+    uint32_t rawDataSize = 0;
+    bool     ownsRawData = false;
+    char const *nextBlock = nullptr;
+    uint32_t blockLength = 0;
+
+    if (wFormatTag == 1)
+    {
+        if ((nBitsPerSample != 8 && nBitsPerSample != 16) || nBlockAlign == 0)
+            return MV_SetErrorCode(MV_InvalidFile);
+
+        int pcmBlockLen = sampleDataSize;
+
+        wavBits = nBitsPerSample;
+        wavChannels = nChannels;
+
+        if (wavBits == 16)
+            pcmBlockLen /= 2;
+
+        if (wavChannels == 2)
+            pcmBlockLen /= 2;
+
+        rawDataPtr = (void *)ptr;
+        rawDataSize = length;
+        ownsRawData = false;
+        nextBlock = (char const *)sampleData;
+        blockLength = pcmBlockLen;
+    }
+    else if (wFormatTag == 0x0011)
+    {
+        if (fmtSize < 20 || nBlockAlign == 0)
+            return MV_SetErrorCode(MV_InvalidFile);
+
+        int const samplesPerBlock = MV_ReadLE16(fmtData + 18);
+
+        // Some encoders write a 20-byte fmt chunk (WAVEFORMATEX + wSamplesPerBlock),
+        // where cbSize may be 0 even though wSamplesPerBlock is present.
+        if (samplesPerBlock <= 0)
+            return MV_SetErrorCode(MV_InvalidFile);
+
+        std::vector<int16_t> decoded;
+        if (!MV_DecodeWAVIMAADPCM(sampleData, sampleDataSize, nChannels, nBlockAlign, samplesPerBlock, decoded) || decoded.empty())
+            return MV_SetErrorCode(MV_InvalidFile);
+
+        size_t const decodedBytes = decoded.size() * sizeof(int16_t);
+        if (decodedBytes > UINT32_MAX)
+            return MV_SetErrorCode(MV_InvalidFile);
+
+        auto pcmData = (int16_t *)Xaligned_alloc(16, decodedBytes);
+        memcpy(pcmData, decoded.data(), decodedBytes);
+
+        wavBits = 16;
+        wavChannels = nChannels;
+        rawDataPtr = pcmData;
+        rawDataSize = (uint32_t)decodedBytes;
+        ownsRawData = true;
+        nextBlock = (char const *)pcmData;
+        blockLength = decoded.size() / nChannels;
+    }
+    else
+    {
+        return MV_SetErrorCode(MV_InvalidFile);
+    }
 
     auto voice = MV_AllocVoice(priority);
-
     if (voice == nullptr)
+    {
+        if (ownsRawData && rawDataPtr != nullptr)
+            ALIGNED_FREE_AND_NULL(rawDataPtr);
+
         return MV_SetErrorCode(MV_NoVoices);
-
-    voice->wavetype    = FMT_WAV;
-    voice->bits        = format.nBitsPerSample;
-    voice->channels    = format.nChannels;
-    voice->GetSound    = MV_GetNextWAVBlock;
-
-    int blocklen = data.size;
-
-    if (voice->bits == 16)
-    {
-        data.size  &= ~1;
-        blocklen     /= 2;
     }
 
-    if (voice->channels == 2)
-    {
-        data.size &= ~1;
-        blocklen    /= 2;
-    }
+    voice->wavetype = FMT_WAV;
+    voice->bits = wavBits;
+    voice->channels = wavChannels;
+    voice->GetSound = MV_GetNextWAVBlock;
+    voice->rawdataptr = rawDataPtr;
+    voice->rawdatasiz = rawDataSize;
+    voice->ownsRawData = ownsRawData;
+    voice->position = 0;
+    voice->BlockLength = blockLength;
+    voice->NextBlock = nextBlock;
+    voice->priority = priority;
+    voice->callbackval = callbackval;
+    voice->Loop.Start = loopstart >= 0 ? voice->NextBlock : nullptr;
+    voice->Loop.End = nullptr;
+    voice->Loop.Count = 0;
+    voice->Loop.Size = loopend > 0 ? loopend - loopstart + 1 : blockLength;
 
-    voice->rawdataptr   = (uint8_t *)ptr;
-    voice->rawdatasiz   = length;
-    voice->position     = 0;
-    voice->BlockLength  = blocklen;
-    voice->NextBlock    = (char *)((intptr_t)ptr + sizeof(riff_header) + riff.format_size + sizeof(data_header));
-    voice->priority     = priority;
-    voice->callbackval  = callbackval;
-    voice->Loop.Start   = loopstart >= 0 ? voice->NextBlock : nullptr;
-    voice->Loop.End     = nullptr;
-    voice->Loop.Count   = 0;
-    voice->Loop.Size    = loopend > 0 ? loopend - loopstart + 1 : blocklen;
-
-    MV_SetVoicePitch(voice, format.nSamplesPerSec, pitchoffset);
+    MV_SetVoicePitch(voice, nSamplesPerSec, pitchoffset);
     MV_SetVoiceVolume(voice, vol, left, right, volume);
     MV_PlayVoice(voice);
 
@@ -461,6 +690,7 @@ int MV_PlayVOC(char *ptr, uint32_t length, int loopstart, int loopend, int pitch
 
     voice->rawdataptr  = (uint8_t *)ptr;
     voice->rawdatasiz  = length;
+    voice->ownsRawData = false;
     voice->wavetype    = FMT_VOC;
     voice->bits        = 8;
     voice->channels    = 1;
@@ -491,6 +721,7 @@ int MV_PlayRAW(char *ptr, uint32_t length, int rate, char *loopstart, char *loop
 
     voice->rawdataptr  = (uint8_t *)ptr;
     voice->rawdatasiz  = length;
+    voice->ownsRawData = false;
     voice->wavetype    = FMT_RAW;
     voice->bits        = 8;
     voice->channels    = 1;

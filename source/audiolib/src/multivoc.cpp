@@ -225,10 +225,16 @@ static void MV_CleanupVoice(VoiceNode* voice, bool useCallBack = true)
 #endif
         default:
             // these are in the default case of this switch instead of down below because the functions above only zero them if MV_LazyAlloc is false
-            voice->rawdataptr = nullptr;
+            if (voice->ownsRawData && voice->rawdataptr != nullptr)
+                ALIGNED_FREE_AND_NULL(voice->rawdataptr);
+            else
+                voice->rawdataptr = nullptr;
+
             voice->rawdatasiz = 0;
             break;
     }
+
+    voice->ownsRawData = false;
 }
 
 void MV_StopVoice(VoiceNode *voice, bool useCallBack)
@@ -460,9 +466,9 @@ static inline VoiceNode *MV_GetLowestPriorityVoice(void)
 
 static inline void MV_FinishAllocation(VoiceNode* voice, uint32_t const allocsize)
 {
-    if (voice->rawdataptr != nullptr && voice->rawdatasiz == allocsize)
+    if (voice->rawdataptr != nullptr && voice->rawdatasiz == allocsize && voice->ownsRawData)
         return;
-    else if (voice->rawdataptr != nullptr && voice->wavetype >= FMT_VORBIS)
+    else if (voice->rawdataptr != nullptr && (voice->ownsRawData || voice->wavetype >= FMT_VORBIS))
     {
         // this is sort of a hack... wavetypes less than FMT_VORBIS never do their own allocations, so don't bother trying to free them
         ALIGNED_FREE_AND_NULL(voice->rawdataptr);
@@ -470,6 +476,7 @@ static inline void MV_FinishAllocation(VoiceNode* voice, uint32_t const allocsiz
 
     voice->rawdatasiz = allocsize;
     voice->rawdataptr = Xaligned_alloc(16, allocsize);
+    voice->ownsRawData = true;
     Bmemset(voice->rawdataptr, 0, allocsize);
 }
 
@@ -509,6 +516,7 @@ VoiceNode *MV_AllocVoice(int priority, uint32_t allocsize /* = 0 */)
     voice->length = 0;
     voice->BlockLength = 0;
     voice->handle = handle;
+    voice->ownsRawData = false;
     voice->next = voice->prev = nullptr;
     MV_Unlock();
 
@@ -1058,6 +1066,7 @@ int MV_StartDemandFeedPlayback(void (*function)(const char** ptr, uint32_t* leng
     voice->priority = priority;
     voice->callbackval = callbackval;
     voice->rawdataptr = userdata;
+    voice->ownsRawData = false;
 
     voice->Loop = {};
 
