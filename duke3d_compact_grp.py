@@ -616,7 +616,7 @@ def parse_sound_id_from_token(token: str, defines: dict):
 
 
 
-def parse_con_defines_and_sounds(con_path: Path, defines: dict, voc_to_sound_id: dict, sound_fields_by_id: dict):
+def parse_con_defines_and_sounds(con_path: Path, defines: dict, voc_to_sound_ids: dict, sound_fields_by_id: dict):
     with con_path.open("r", encoding="utf-8", errors="replace") as fh:
         for raw_line in fh:
             line = strip_con_line_comment(raw_line).strip()
@@ -649,7 +649,7 @@ def parse_con_defines_and_sounds(con_path: Path, defines: dict, voc_to_sound_id:
                 if sound_id is None:
                     continue
 
-                voc_to_sound_id[sound_file.lower()] = sound_id
+                voc_to_sound_ids.setdefault(sound_file.lower(), set()).add(sound_id)
 
                 # USER.CON definesound format:
                 # definesound <value> <filename> <pitch_lower> <pitch_upper> <priority> <type> <distance>
@@ -666,7 +666,7 @@ def parse_con_defines_and_sounds(con_path: Path, defines: dict, voc_to_sound_id:
 
 def build_sound_maps_from_cons(temp_dir: Path):
     defines = {}
-    voc_to_sound_id = {}
+    voc_to_sound_ids = {}
     sound_fields_by_id = {}
 
     # Parse all CON files in deterministic order. This covers common DUKE3D
@@ -676,9 +676,9 @@ def build_sound_maps_from_cons(temp_dir: Path):
         key=lambda p: p.name.lower(),
     )
     for con_file in con_files:
-        parse_con_defines_and_sounds(con_file, defines, voc_to_sound_id, sound_fields_by_id)
+        parse_con_defines_and_sounds(con_file, defines, voc_to_sound_ids, sound_fields_by_id)
 
-    return voc_to_sound_id, sound_fields_by_id
+    return voc_to_sound_ids, sound_fields_by_id
 
 
 
@@ -989,28 +989,30 @@ def main():
                         print(ffmpeg_proc.stderr)
                     return 1
 
-                sound_id = voc_sound_ids.get(voc_file.name.lower())
-                if sound_id is None:
+                sound_ids = sorted(voc_sound_ids.get(voc_file.name.lower(), set()))
+                if not sound_ids:
                     print(f"[warn] No sound ID found in CON files for {voc_file.name}; skipping sound {{ ... }} def entry")
                     continue
 
-                sound_fields = sound_fields_by_id.get(sound_id)
-                if sound_fields:
-                    duke_def.write(
-                        "sound { "
-                        f"id {sound_id} "
-                        f"file {wav_name} "
-                        f"minpitch {sound_fields['minpitch']} "
-                        f"maxpitch {sound_fields['maxpitch']} "
-                        f"priority {sound_fields['priority']} "
-                        f"type {sound_fields['type']} "
-                        f"distance {sound_fields['distance']} "
-                        "}\n"
-                    )
-                else:
-                    duke_def.write(f"sound {{ id {sound_id} file {wav_name} }}\n")
+                for sound_id in sound_ids:
+                    sound_fields = sound_fields_by_id.get(sound_id)
+                    if sound_fields:
+                        duke_def.write(
+                            "sound { "
+                            f"id {sound_id} "
+                            f"file {wav_name} "
+                            f"minpitch {sound_fields['minpitch']} "
+                            f"maxpitch {sound_fields['maxpitch']} "
+                            f"priority {sound_fields['priority']} "
+                            f"type {sound_fields['type']} "
+                            f"distance {sound_fields['distance']} "
+                            "}\n"
+                        )
+                    else:
+                        duke_def.write(f"sound {{ id {sound_id} file {wav_name} }}\n")
 
-                emitted_sound_defs += 1
+                    emitted_sound_defs += 1
+
                 replaced_voc_files.add(voc_file.name.lower())
 
             if emitted_sound_defs > 0:
