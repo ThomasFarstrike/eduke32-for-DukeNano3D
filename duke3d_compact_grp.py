@@ -547,10 +547,69 @@ def expand_required_tiles_with_runtime_state_tiles(required_tiles):
     return expanded
 
 
+def parse_sound_id_from_token(token: str, defines: dict):
+    if token.isdigit():
+        return int(token)
+    return defines.get(token.lower())
+
+
+
+def parse_con_defines_and_sounds(con_path: Path, defines: dict, voc_to_sound_id: dict):
+    with con_path.open("r", encoding="utf-8", errors="replace") as fh:
+        for raw_line in fh:
+            line = strip_con_line_comment(raw_line).strip()
+            if not line:
+                continue
+
+            # Examples:
+            #   define PISTOL_FIRE 3
+            #   sound PISTOL_FIRE PISTOL.VOC ...
+            #   definesound INSERT_CLIP clipin.voc ...
+            tokens = line.split()
+            if not tokens:
+                continue
+
+            keyword = tokens[0].lower()
+            if keyword == "define" and len(tokens) >= 3:
+                name = tokens[1].lower()
+                value = tokens[2]
+                if re.match(r"^-?\d+$", value):
+                    defines[name] = int(value)
+                continue
+
+            if keyword in {"sound", "definesound"} and len(tokens) >= 3:
+                sound_token = tokens[1]
+                sound_file = Path(tokens[2]).name
+                if Path(sound_file).suffix.lower() != ".voc":
+                    continue
+
+                sound_id = parse_sound_id_from_token(sound_token, defines)
+                if sound_id is not None:
+                    voc_to_sound_id[sound_file.lower()] = sound_id
+
+
+
+def build_voc_sound_id_map_from_cons(temp_dir: Path):
+    defines = {}
+    voc_to_sound_id = {}
+
+    # Parse all CON files in deterministic order. This covers common DUKE3D
+    # layouts where sound tokens are defined in one CON and used in another.
+    con_files = sorted(
+        [p for p in temp_dir.iterdir() if p.is_file() and p.suffix.lower() == ".con"],
+        key=lambda p: p.name.lower(),
+    )
+    for con_file in con_files:
+        parse_con_defines_and_sounds(con_file, defines, voc_to_sound_id)
+
+    return voc_to_sound_id
+
+
+
 def main():
     normalized_argv = normalize_case_insensitive_options(
         sys.argv[1:],
-        ["--pngfolder", "--map", "--includeart", "--ultraminimalmenu", "--excludefiles"],
+        ["--pngfolder", "--map", "--includeart", "--ultraminimalmenu", "--excludefiles", "--adpcmwav"],
     )
 
     parser = argparse.ArgumentParser(description="Re-package Duke Nukem 3D GRP with PNG tiles and duke3d.def")
@@ -622,6 +681,14 @@ def main():
             "Example: --debug-tiles 1289,1290,407,411,2813"
         ),
     )
+    parser.add_argument(
+        "--adpcmwav",
+        action="store_true",
+        help=(
+            "Convert each non-excluded .VOC in the extracted GRP to ADPCM IMA WAV via ffmpeg "
+            "and emit matching sound { id N file name.wav } entries in duke3d.def"
+        ),
+    )
 
     args = parser.parse_args(normalized_argv)
 
@@ -679,6 +746,12 @@ def main():
 
     if args.pngfolder and (args.optipng or args.zopflipng):
         print("[info] --pngfolder was provided: skipping --optipng/--zopflipng and using precomputed PNGs as-is")
+
+    ffmpeg = None
+    if args.adpcmwav:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise FileNotFoundError("Requested --adpcmwav but tool 'ffmpeg' was not found in PATH")
 
     png_sources = {}
     if args.pngfolder:
@@ -802,10 +875,56 @@ def main():
     if duke_def_path.exists():
         duke_def_path.unlink()
 
+    replaced_voc_files = set()
+
     with duke_def_path.open("w", encoding="utf-8") as duke_def:
         written_tiles = set()
         anim_def_candidates = {}
         emitted_anim_ranges = []
+
+        if args.adpcmwav:
+            voc_sound_ids = build_voc_sound_id_map_from_cons(temp_dir)
+            emitted_sound_defs = 0
+
+            voc_files = sorted(
+                [p for p in temp_dir.iterdir() if p.is_file() and p.suffix.lower() == ".voc"],
+                key=lambda p: p.name.lower(),
+            )
+
+            for voc_file in voc_files:
+                if voc_file.name.lower() in excluded_files:
+                    continue
+
+                wav_name = f"{voc_file.stem.lower()}.wav"
+                wav_path = temp_dir / wav_name
+
+                ffmpeg_proc = subprocess.run(
+                    [ffmpeg, "-y", "-i", str(voc_file), "-c:a", "adpcm_ima_wav", str(wav_path)],
+                    cwd=temp_dir,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if ffmpeg_proc.returncode != 0 or not wav_path.exists():
+                    print(f"[error] ffmpeg --adpcmwav failed for {voc_file.name}; aborting")
+                    if ffmpeg_proc.stdout:
+                        print(ffmpeg_proc.stdout)
+                    if ffmpeg_proc.stderr:
+                        print(ffmpeg_proc.stderr)
+                    return 1
+
+                sound_id = voc_sound_ids.get(voc_file.name.lower())
+                if sound_id is None:
+                    print(f"[warn] No sound ID found in CON files for {voc_file.name}; skipping sound {{ ... }} def entry")
+                    continue
+
+                duke_def.write(f"sound {{ id {sound_id} file {wav_name} }}\n")
+                emitted_sound_defs += 1
+                replaced_voc_files.add(voc_file.name.lower())
+
+            if emitted_sound_defs > 0:
+                duke_def.write("\n")
+                print(f"[info] --adpcmwav: emitted {emitted_sound_defs} sound entries in duke3d.def")
 
         if selected_tile_files:
             art_files = [
@@ -1009,6 +1128,7 @@ def main():
     # Step 3: repack GRP. ART files are included for --onlysmaller or selective tile-file processing.
     patterns = [
         "*.VOC", "*.voc",
+        "*.WAV", "*.wav",
         "*.PNG", "*.png",
         "*.CON", "*.con",
         "*.DAT", "*.dat",
@@ -1031,6 +1151,13 @@ def main():
 
     if excluded_files:
         files = [f for f in files if f.name.lower() not in excluded_files]
+
+    if args.adpcmwav and replaced_voc_files:
+        files = [
+            f for f in files
+            if f.suffix.lower() != ".voc"
+            or f.name.lower() not in replaced_voc_files
+        ]
 
     if required_tiles is not None:
         needed_art_indices = {tile // 256 for tile in required_tiles}

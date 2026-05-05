@@ -49,6 +49,11 @@ WARAMB23.VOC
 WARAMB13.VOC
 WARAMB21.VOC,40k
 FIRE09.VOC,38k
+DSCREM38.VOC,unused
+PAIN13.VOC,unused
+PAIN28.VOC,unused
+PIGWRN.VOC,unused
+PISSIN01.VOC,unused
 EOF
 )
 
@@ -62,8 +67,6 @@ done <<EOF
 $EXCLUDE_CSVS
 EOF
 
-python3 duke3d_compact_grp.py \
-    --optipng --zopflipng --ultraminimalmenu \
-    --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp \
-    "${EXCLUDE_ARGS[@]}" \
-    /tmp/DUKE3D_v1.3d_shareware.grp
+#python3 duke3d_compact_grp.py --optipng --zopflipng --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp
+
+python3 duke3d_compact_grp.py --optipng --zopflipng --adpcmwav --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp
