@@ -903,7 +903,7 @@ def expand_required_tiles_with_con_precache_ranges(required_tiles, precache_rang
 def main():
     normalized_argv = normalize_case_insensitive_options(
         sys.argv[1:],
-        ["--pngfolder", "--map", "--includeart", "--ultraminimalmenu", "--excludefiles", "--adpcmwav", "--maxsoundsize"],
+        ["--pngfolder", "--map", "--includeart", "--ultraminimalmenu", "--excludefiles", "--adpcmwav", "--adpcmwidth", "--maxsoundsize"],
     )
 
     parser = argparse.ArgumentParser(description="Re-package Duke Nukem 3D GRP with PNG tiles and duke3d.def")
@@ -984,8 +984,18 @@ def main():
         "--adpcmwav",
         action="store_true",
         help=(
-            "Convert each non-excluded .VOC in the extracted GRP to ADPCM IMA WAV via ffmpeg "
+            "Convert each non-excluded .VOC in the extracted GRP to ADPCM IMA WAV "
             "and emit matching sound { id N file name.wav } entries in duke3d.def"
+        ),
+    )
+    parser.add_argument(
+        "--adpcmwidth",
+        metavar="N",
+        type=int,
+        choices=range(2, 6),
+        help=(
+            "Use adpcm-xq two-pass conversion width N (2..5) for --adpcmwav: "
+            "ffmpeg VOC->WAV then adpcm-xq -wN WAV->ADPCM WAV"
         ),
     )
     parser.add_argument(
@@ -999,6 +1009,9 @@ def main():
 
     if args.maxsoundsize is not None and args.maxsoundsize < 0:
         parser.error("--maxsoundsize requires a non-negative integer")
+
+    if args.adpcmwidth is not None and not args.adpcmwav:
+        parser.error("--adpcmwidth requires --adpcmwav")
 
     selected_tile_files = set(args.tilefilestopng or [])
     included_art_files = set(args.includeart or [])
@@ -1054,10 +1067,18 @@ def main():
         print("[info] --pngfolder was provided: skipping --optipng/--zopflipng and using precomputed PNGs as-is")
 
     ffmpeg = None
+    adpcm_xq = None
     if args.adpcmwav:
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             raise FileNotFoundError("Requested --adpcmwav but tool 'ffmpeg' was not found in PATH")
+
+        if args.adpcmwidth is not None:
+            adpcm_xq = Path("/home/user/sources/adpcm-xq/adpcm-xq")
+            if not (adpcm_xq.exists() and os.access(adpcm_xq, os.X_OK)):
+                raise FileNotFoundError(
+                    "Requested --adpcmwidth but '/home/user/sources/adpcm-xq/adpcm-xq' was not found or is not executable"
+                )
 
     png_sources = {}
     if args.pngfolder:
@@ -1267,20 +1288,59 @@ def main():
                 wav_name = f"{voc_file.stem.lower()}.wav"
                 wav_path = temp_dir / wav_name
 
-                ffmpeg_proc = subprocess.run(
-                    [ffmpeg, "-y", "-i", str(voc_file), "-c:a", "adpcm_ima_wav", str(wav_path)],
-                    cwd=temp_dir,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                if ffmpeg_proc.returncode != 0 or not wav_path.exists():
-                    print(f"[error] ffmpeg --adpcmwav failed for {voc_file.name}; aborting")
-                    if ffmpeg_proc.stdout:
-                        print(ffmpeg_proc.stdout)
-                    if ffmpeg_proc.stderr:
-                        print(ffmpeg_proc.stderr)
-                    return 1
+                if args.adpcmwidth is None:
+                    ffmpeg_proc = subprocess.run(
+                        [ffmpeg, "-y", "-i", str(voc_file), "-c:a", "adpcm_ima_wav", str(wav_path)],
+                        cwd=temp_dir,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if ffmpeg_proc.returncode != 0 or not wav_path.exists():
+                        print(f"[error] ffmpeg --adpcmwav failed for {voc_file.name}; aborting")
+                        if ffmpeg_proc.stdout:
+                            print(ffmpeg_proc.stdout)
+                        if ffmpeg_proc.stderr:
+                            print(ffmpeg_proc.stderr)
+                        return 1
+                else:
+                    intermediate_wav_path = temp_dir / f"{voc_file.stem.lower()}.__pcm.wav"
+                    intermediate_wav_path.unlink(missing_ok=True)
+                    wav_path.unlink(missing_ok=True)
+
+                    ffmpeg_proc = subprocess.run(
+                        [ffmpeg, "-y", "-i", str(voc_file), str(intermediate_wav_path)],
+                        cwd=temp_dir,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if ffmpeg_proc.returncode != 0 or not intermediate_wav_path.exists():
+                        print(f"[error] ffmpeg first pass (--adpcmwidth) failed for {voc_file.name}; aborting")
+                        if ffmpeg_proc.stdout:
+                            print(ffmpeg_proc.stdout)
+                        if ffmpeg_proc.stderr:
+                            print(ffmpeg_proc.stderr)
+                        return 1
+
+                    adpcm_xq_proc = subprocess.run(
+                        [str(adpcm_xq), f"-w{args.adpcmwidth}", str(intermediate_wav_path), str(wav_path)],
+                        cwd=temp_dir,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    intermediate_wav_path.unlink(missing_ok=True)
+
+                    if adpcm_xq_proc.returncode != 0 or not wav_path.exists():
+                        print(
+                            f"[error] adpcm-xq second pass (--adpcmwidth {args.adpcmwidth}) failed for {voc_file.name}; aborting"
+                        )
+                        if adpcm_xq_proc.stdout:
+                            print(adpcm_xq_proc.stdout)
+                        if adpcm_xq_proc.stderr:
+                            print(adpcm_xq_proc.stderr)
+                        return 1
 
                 if args.maxsoundsize is not None and wav_path.stat().st_size > args.maxsoundsize:
                     print(
