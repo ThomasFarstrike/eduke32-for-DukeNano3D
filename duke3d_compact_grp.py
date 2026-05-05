@@ -739,6 +739,17 @@ def expand_required_tiles_with_sprite_precache_ranges(required_tiles):
             "triggers": {595},
             "tiles": {596},
         },
+        {
+            "name": "Wall screenbreak random replacement trio",
+            # sector.cpp wall damage path swaps many breakable wall pics to
+            # W_SCREENBREAK + (krand() % 3) => 357..359
+            "triggers": {
+                179, 263, 264, 265, 266, 267, 268, 269, 270,
+                271, 272, 273, 274, 275, 276, 277, 278, 279,
+                280, 281,
+            },
+            "tiles": {357, 358, 359},
+        },
     ]
 
     for group in runtime_state_groups:
