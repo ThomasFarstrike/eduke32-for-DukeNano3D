@@ -230,6 +230,16 @@ def strip_con_line_comment(line: str):
     return line.split("//", 1)[0].rstrip("\n")
 
 
+def normalize_con_filename_token(token: str):
+    token = token.strip().strip("\"'")
+    token = token.rstrip(",;")
+    return Path(token).name.lower()
+
+
+def looks_like_mid_token(token: str):
+    return normalize_con_filename_token(token).endswith(".mid")
+
+
 def determine_required_mid_files_from_user_con(temp_dir: Path, selected_map_name: str):
     user_con = find_file_case_insensitive(temp_dir, "USER.CON")
     if user_con is None:
@@ -242,7 +252,7 @@ def determine_required_mid_files_from_user_con(temp_dir: Path, selected_map_name
     current_music_volume = None
 
     with user_con.open("r", encoding="utf-8", errors="replace") as fh:
-        for raw_line in fh:
+        for line_num, raw_line in enumerate(fh, start=1):
             uncommented = strip_con_line_comment(raw_line)
             stripped = uncommented.strip()
 
@@ -260,45 +270,97 @@ def determine_required_mid_files_from_user_con(temp_dir: Path, selected_map_name
                 if len(tokens) >= 4 and tokens[1].isdigit() and tokens[2].isdigit():
                     volume = int(tokens[1])
                     level = int(tokens[2])
-                    map_name = Path(tokens[3]).name.lower()
+                    map_name = normalize_con_filename_token(tokens[3])
                     map_to_slot[map_name] = (volume, level)
+                else:
+                    print(f"[debug] USER.CON:{line_num}: ignored malformed definelevelname: {stripped}")
                 continue
 
             if keyword == "music":
                 current_music_volume = None
                 if len(tokens) >= 2 and tokens[1].isdigit():
                     current_music_volume = int(tokens[1])
-                    track_tokens = [Path(t).name.lower() for t in tokens[2:]]
+                    track_tokens = [normalize_con_filename_token(t) for t in tokens[2:] if looks_like_mid_token(t)]
                     music_by_volume.setdefault(current_music_volume, []).extend(track_tokens)
+                else:
+                    print(f"[debug] USER.CON:{line_num}: ignored malformed music line: {stripped}")
                 continue
 
-            if current_music_volume is not None and raw_line[:1].isspace():
-                track_tokens = [Path(t).name.lower() for t in tokens]
-                music_by_volume.setdefault(current_music_volume, []).extend(track_tokens)
-                continue
+            # Continuation support:
+            #  - classic indentation-based continued music lists
+            #  - non-indented lines containing only MID tokens after a music line
+            if current_music_volume is not None:
+                continuation_tokens = [normalize_con_filename_token(t) for t in tokens if looks_like_mid_token(t)]
+                if continuation_tokens and (
+                    raw_line[:1].isspace()
+                    or len(continuation_tokens) == len(tokens)
+                ):
+                    music_by_volume.setdefault(current_music_volume, []).extend(continuation_tokens)
+                    continue
 
             current_music_volume = None
 
     required = set(music_by_volume.get(0, []))
 
-    slot = map_to_slot.get(selected_map_name.lower())
+    selected_map_name_norm = normalize_con_filename_token(selected_map_name)
+    slot = map_to_slot.get(selected_map_name_norm)
+
+    print(
+        f"[debug] USER.CON parse summary: maps={len(map_to_slot)} music_volumes={sorted(music_by_volume.keys())} "
+        f"selected_map={selected_map_name_norm}"
+    )
+
     if slot is None:
+        sample_maps = sorted(map_to_slot.keys())[:12]
         print(
-            f"[warn] Map {selected_map_name} not found in USER.CON definelevelname list; "
+            f"[warn] Map {selected_map_name_norm} not found in USER.CON definelevelname list; "
             "including only title/end music"
         )
+        if sample_maps:
+            print(f"[debug] USER.CON map samples: {', '.join(sample_maps)}")
+        print(f"[debug] USER.CON title/end tracks: {sorted(required)}")
         return required
 
     volume, level = slot
-    volume_tracks = music_by_volume.get(volume, [])
-    if level < len(volume_tracks):
-        required.add(volume_tracks[level])
+
+    # In USER.CON, definelevelname volumes are usually 0-based while music
+    # episode lists are usually 1-based (`music 1 ...` for episode 1). Also,
+    # `music 0 ...` is commonly title/end tracks and should not be used for
+    # episode level mapping when a shifted episode list exists.
+    direct_tracks = music_by_volume.get(volume) or []
+    shifted_volume = volume + 1
+    shifted_tracks = music_by_volume.get(shifted_volume) or []
+
+    if shifted_tracks:
+        volume_tracks = shifted_tracks
+        resolved_music_volume = shifted_volume
+    else:
+        volume_tracks = direct_tracks
+        resolved_music_volume = volume
+
+    print(
+        f"[debug] USER.CON music candidates for map volume {volume}: "
+        f"direct(volume={volume}, tracks={len(direct_tracks)}) "
+        f"shifted(volume={shifted_volume}, tracks={len(shifted_tracks)})"
+    )
+
+    print(
+        f"[debug] USER.CON slot for {selected_map_name_norm}: definelevelname volume={volume} level={level} "
+        f"resolved_music_volume={resolved_music_volume} track_count={len(volume_tracks or [])}"
+    )
+
+    if level < len(volume_tracks or []):
+        chosen_track = volume_tracks[level]
+        required.add(chosen_track)
+        print(f"[debug] USER.CON selected map track: {chosen_track}")
     else:
         print(
-            f"[warn] No music track for volume {volume} level {level} in USER.CON; "
+            f"[warn] No music track for definelevelname volume {volume} "
+            f"(resolved music volume {resolved_music_volume}) level {level} in USER.CON; "
             "including only title/end music"
         )
 
+    print(f"[debug] USER.CON required MID files: {sorted(required)}")
     return required
 
 
