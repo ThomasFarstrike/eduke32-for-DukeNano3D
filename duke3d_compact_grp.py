@@ -6,6 +6,7 @@ import shutil
 import re
 import subprocess
 import sys
+from collections import defaultdict
 
 def run(cmd, cwd, check=True):
     print(f"[run] {cmd} (cwd={cwd})")
@@ -112,14 +113,75 @@ def get_tile_offsets(arttool: Path, cwd: Path, tile_num: int):
     return _decode_art_offset(raw_x), _decode_art_offset(raw_y)
 
 
+def _collect_available_tile_numbers(cwd: Path):
+    tile_numbers = set()
+
+    for art_file in sorted(cwd.glob("tiles*.art")):
+        idx = tilefile_index_from_name(art_file.name)
+        if idx is None:
+            continue
+        start = idx * 256
+        tile_numbers.update(range(start, start + 256))
+
+    for art_file in sorted(cwd.glob("TILES*.ART")):
+        idx = tilefile_index_from_name(art_file.name)
+        if idx is None:
+            continue
+        start = idx * 256
+        tile_numbers.update(range(start, start + 256))
+
+    return tile_numbers
+
+
 def expand_required_tiles_with_animation_frames(arttool: Path, cwd: Path, required_tiles):
     expanded = set(required_tiles)
+    if not required_tiles:
+        return expanded
+
+    available_tiles = _collect_available_tile_numbers(cwd)
+    if not available_tiles:
+        return expanded
+
+    parent = {tile: tile for tile in available_tiles}
+
+    def find(tile):
+        while parent[tile] != tile:
+            parent[tile] = parent[parent[tile]]
+            tile = parent[tile]
+        return tile
+
+    def union(a, b):
+        ra = find(a)
+        rb = find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    tile_set = available_tiles
+    for tile in sorted(tile_set):
+        anim_info = get_tile_anim_info(arttool, cwd, tile)
+        if anim_info["frames"] <= 0 or anim_info["type"] <= 0:
+            continue
+
+        first_tile = min(anim_info["first"], anim_info["last"])
+        last_tile = max(anim_info["first"], anim_info["last"])
+
+        for anim_tile in range(first_tile, last_tile + 1):
+            if anim_tile in tile_set:
+                union(tile, anim_tile)
+
+    components = defaultdict(set)
+    for tile in tile_set:
+        components[find(tile)].add(tile)
 
     for tile in list(required_tiles):
+        if tile in tile_set:
+            expanded.update(components[find(tile)])
+            continue
+
+        # Fallback when a required tile lies outside discovered ART ranges.
         first_tile, last_tile = get_tile_anim_range(arttool, cwd, tile)
         if first_tile > last_tile:
             first_tile, last_tile = last_tile, first_tile
-
         for anim_tile in range(first_tile, last_tile + 1):
             if anim_tile >= 0:
                 expanded.add(anim_tile)
@@ -588,15 +650,60 @@ def expand_required_tiles_with_enemy_runtime_ranges(required_tiles):
     return expanded
 
 
-def expand_required_tiles_with_runtime_state_tiles(required_tiles):
+def expand_required_tiles_with_sprite_precache_ranges(required_tiles):
     """
-    Expand map-derived tiles with explicit runtime state-transition tiles.
+    Mirror non-PICANM sprite pre-cache ranges from premap.cpp::cacheTilesForSprite().
 
-    These are non-PICANM transitions where game code switches picnum to a
-    different tile at runtime (not a contiguous animation declared in ART).
+    `mapinfo` reports direct map picnums only. Some sprites force additional
+    contiguous tiles at runtime via `extraTiles` or explicit side-effects.
     """
     expanded = set(required_tiles)
 
+    # Contiguous picnum..picnum+N ranges implied by `extraTiles` behavior.
+    # Values are intentionally from source/duke3d/src/premap.cpp switch cases.
+    contiguous_runtime_groups = [
+        {
+            "name": "Camera and nuke barrel runtime tiles",
+            "triggers": {621, 1227},      # CAMERA1 / NUKEBARREL
+            "length": 5,                  # picnum .. picnum+4
+        },
+        {
+            "name": "Exploding barrel and hazard variants",
+            "triggers": {1079, 1238, 1247},  # OOZFILTER / EXPLODINGBARREL / SEENINE
+            "length": 3,                      # picnum .. picnum+2
+        },
+        {
+            "name": "Rubber can wobble variants",
+            "triggers": {1062},          # RUBBERCAN
+            "length": 2,                 # picnum .. picnum+1
+        },
+        {
+            "name": "Toilet water animation chunk",
+            "triggers": {921},           # TOILETWATER
+            "length": 4,                 # picnum .. picnum+3
+        },
+        {
+            "name": "Atomic health spin frames",
+            "triggers": {100},           # ATOMICHEALTH
+            "length": 14,                # picnum .. picnum+13
+        },
+        {
+            "name": "FEMPIC1 runtime span",
+            "triggers": {1280},          # FEMPIC1
+            "length": 44,                # picnum .. picnum+43
+        },
+    ]
+
+    for group in contiguous_runtime_groups:
+        matching_triggers = expanded & group["triggers"]
+        if not matching_triggers:
+            continue
+
+        length = group["length"]
+        for trigger in matching_triggers:
+            expanded.update(range(trigger, trigger + length))
+
+    # Explicit one-off state/side-effect tiles switched at runtime.
     runtime_state_groups = [
         {
             "name": "Fan sprite broken states",
@@ -607,6 +714,12 @@ def expand_required_tiles_with_runtime_state_tiles(required_tiles):
             "name": "Nuke button punch sequence",
             "triggers": {142},               # NUKEBUTTON
             "tiles": {143, 144, 145},        # NUKEBUTTON+1..+3
+        },
+        {
+            "name": "Hydrent/toilet/stall broken + water states",
+            "triggers": {569, 571, 981},     # TOILET / STALL / HYDRENT
+            "tiles": {568, 572, 921, 922, 923, 924, 938},
+            # TOILETBROKE(568), STALLBROKE(572), TOILETWATER..+3(921..924), BROKEFIREHYDRENT(938)
         },
     ]
 
@@ -954,12 +1067,12 @@ def main():
         print("[warn] No .MAP files found in extracted GRP; skipping map-based tile restriction")
 
     if required_tiles is not None:
-        runtime_state_tiles = expand_required_tiles_with_runtime_state_tiles(required_tiles)
-        runtime_state_added = len(runtime_state_tiles) - len(required_tiles)
-        if runtime_state_added > 0:
-            required_tiles = runtime_state_tiles
+        sprite_precache_tiles = expand_required_tiles_with_sprite_precache_ranges(required_tiles)
+        sprite_precache_added = len(sprite_precache_tiles) - len(required_tiles)
+        if sprite_precache_added > 0:
+            required_tiles = sprite_precache_tiles
             print(
-                f"[info] map-based tile set: added {runtime_state_added} runtime state-transition tiles "
+                f"[info] map-based tile set: added {sprite_precache_added} sprite runtime-precache tiles "
                 f"(total now {len(required_tiles)})"
             )
 
@@ -1013,6 +1126,7 @@ def main():
 
     with duke_def_path.open("w", encoding="utf-8") as duke_def:
         written_tiles = set()
+        missing_required_png_sources = []
         anim_def_candidates = {}
         emitted_anim_ranges = []
 
@@ -1108,6 +1222,7 @@ def main():
                 if args.pngfolder:
                     source_png = png_sources.get(global_tile)
                     if not source_png:
+                        missing_required_png_sources.append(global_tile)
                         continue
                     shutil.copy2(source_png, out_png)
                 else:
@@ -1235,6 +1350,16 @@ def main():
                         anim_def_candidates[global_tile] = anim_info
 
                 # Keep PCX files for debugging when --keep-temp is used.
+
+        if missing_required_png_sources:
+            missing_required_png_sources = sorted(set(missing_required_png_sources))
+            preview = ",".join(str(t) for t in missing_required_png_sources[:24])
+            if len(missing_required_png_sources) > 24:
+                preview += ",..."
+            print(
+                f"[warn] --pngfolder missing required TILE####.PNG files for "
+                f"{len(missing_required_png_sources)} tile(s): {preview}"
+            )
 
         emitted_anim_defs = 0
         skipped_anim_defs = 0
