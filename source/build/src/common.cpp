@@ -137,33 +137,18 @@ int32_t testkopen(const char *filename, char searchfirst)
     return (fd != buildvfs_kfd_invalid);
 }
 
-// checks from path and in ZIPs, returns 1 if NOT found
+// checks from any virtual filesystem source (search paths, ZIP/PK3, GRP), returns 1 if NOT found
 int32_t check_file_exist(const char *fn)
 {
 #ifdef USE_PHYSFS
     return !PHYSFS_exists(fn);
 #else
-    int32_t opsm = pathsearchmode;
-    char *tfn;
+    int32_t const found = testkopen(fn, 0);
 
-    pathsearchmode = 1;
-    if (findfrompath(fn,&tfn) < 0)
-    {
-        char buf[BMAX_PATH];
+    if (!found)
+        LOG_F(ERROR, "File %s not found", fn);
 
-        Bstrcpy(buf,fn);
-        kzfindfilestart(buf);
-        if (!kzfindfile(buf))
-        {
-            LOG_F(ERROR, "File %s not found", fn);
-            pathsearchmode = opsm;
-            return 1;
-        }
-    }
-    else Xfree(tfn);
-    pathsearchmode = opsm;
-
-    return 0;
+    return !found;
 #endif
 }
 
