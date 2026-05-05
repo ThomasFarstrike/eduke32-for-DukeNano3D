@@ -1269,6 +1269,7 @@ def main():
     with duke_def_path.open("w", encoding="utf-8") as duke_def:
         written_tiles = set()
         missing_required_png_sources = []
+        skipped_zero_size_tiles_without_png = []
         anim_def_candidates = {}
         emitted_anim_ranges = []
 
@@ -1417,6 +1418,10 @@ def main():
                 if args.pngfolder:
                     source_png = png_sources.get(global_tile)
                     if not source_png:
+                        raw_size = get_tile_raw_size(arttool, temp_dir, global_tile)
+                        if raw_size == 0:
+                            skipped_zero_size_tiles_without_png.append(global_tile)
+                            continue
                         missing_required_png_sources.append(global_tile)
                         continue
                     shutil.copy2(source_png, out_png)
@@ -1546,6 +1551,13 @@ def main():
 
                 # Keep PCX files for debugging when --keep-temp is used.
 
+        if skipped_zero_size_tiles_without_png:
+            skipped_zero_size_tiles_without_png = sorted(set(skipped_zero_size_tiles_without_png))
+            print(
+                f"[info] --pngfolder: skipped {len(skipped_zero_size_tiles_without_png)} "
+                "required tile(s) that are 0x0 in ART and have no TILE####.PNG source"
+            )
+
         if missing_required_png_sources:
             missing_required_png_sources = sorted(set(missing_required_png_sources))
             preview = ",".join(str(t) for t in missing_required_png_sources[:24])
@@ -1553,7 +1565,7 @@ def main():
                 preview += ",..."
             print(
                 f"[error] --pngfolder missing required TILE####.PNG files for "
-                f"{len(missing_required_png_sources)} tile(s): {preview}"
+                f"{len(missing_required_png_sources)} non-empty tile(s): {preview}"
             )
             print("[error] Should we be aborting to avoid silently skipping required tiles?")
             #return 1
