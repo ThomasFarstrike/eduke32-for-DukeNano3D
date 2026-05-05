@@ -159,6 +159,15 @@ def parse_tile_numbers_arg(value: str):
     return sorted(set(numbers))
 
 
+def parse_map_arg(value: str):
+    parts = [Path(p.strip()).name for p in value.split(",") if p.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError(
+            "Expected comma-separated map filenames, e.g. E1L1.MAP,E1L2.MAP"
+        )
+    return parts
+
+
 def find_file_case_insensitive(base_dir: Path, name: str):
     normalized = name.lower()
 
@@ -722,8 +731,13 @@ def main():
     )
     parser.add_argument(
         "--map",
-        metavar="MAPNAME",
-        help="Limit tile processing to tiles used by MAPNAME (case-insensitive) using mapinfo",
+        metavar="MAP1,MAP2,...",
+        type=parse_map_arg,
+        help=(
+            "Limit tile processing to tiles used by one or more map files "
+            "(comma-separated, case-insensitive), e.g. E1L1.MAP,E1L2.MAP. "
+            "If omitted, all .MAP files in the extracted GRP are used."
+        ),
     )
     parser.add_argument(
         "--includeart",
@@ -797,9 +811,7 @@ def main():
     kextract = find_tool(script_dir, "kextract")
     kgroup = find_tool(script_dir, "kgroup")
     arttool = find_tool(script_dir, "arttool")
-    mapinfo = None
-    if args.map:
-        mapinfo = find_tool(script_dir, "mapinfo")
+    mapinfo = find_tool(script_dir, "mapinfo")
     convert = None
     if not args.pngfolder:
         convert = shutil.which("convert")
@@ -858,38 +870,61 @@ def main():
 
     required_tiles = None
     required_mid_files = None
-    selected_map_name = None
+    selected_map_names = set()
+
     if args.map:
-        map_file = find_file_case_insensitive(temp_dir, args.map)
-        if map_file is None:
-            print(f"Map file not found in extracted GRP (case-insensitive): {args.map}")
-            return 1
-
-        selected_map_name = map_file.name.lower()
-
-        mapinfo_proc = subprocess.run(
-            [str(mapinfo), str(map_file)],
-            cwd=temp_dir,
-            check=False,
-            capture_output=True,
-            text=True,
+        map_files_to_process = []
+        for requested_map in args.map:
+            map_file = find_file_case_insensitive(temp_dir, requested_map)
+            if map_file is None:
+                print(f"Map file not found in extracted GRP (case-insensitive): {requested_map}")
+                return 1
+            map_files_to_process.append(map_file)
+    else:
+        map_files_to_process = sorted(
+            [p for p in temp_dir.iterdir() if p.is_file() and p.suffix.lower() == ".map"],
+            key=lambda p: p.name.lower(),
         )
-        mapinfo_output = (mapinfo_proc.stdout or "") + "\n" + (mapinfo_proc.stderr or "")
-        if mapinfo_proc.returncode != 0:
-            print(f"[error] mapinfo failed for map {map_file.name}; aborting")
-            if mapinfo_output.strip():
-                print(mapinfo_output)
-            return 1
 
-        required_tiles = parse_used_tiles_from_mapinfo_output(mapinfo_output)
-        print(f"[info] --map {map_file.name}: restricting to {len(required_tiles)} used tiles")
+    if map_files_to_process:
+        required_tiles = set()
+        for map_file in map_files_to_process:
+            selected_map_names.add(map_file.name.lower())
+
+            mapinfo_proc = subprocess.run(
+                [str(mapinfo), str(map_file)],
+                cwd=temp_dir,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            mapinfo_output = (mapinfo_proc.stdout or "") + "\n" + (mapinfo_proc.stderr or "")
+            if mapinfo_proc.returncode != 0:
+                print(f"[error] mapinfo failed for map {map_file.name}; aborting")
+                if mapinfo_output.strip():
+                    print(mapinfo_output)
+                return 1
+
+            used_tiles_for_map = parse_used_tiles_from_mapinfo_output(mapinfo_output)
+            required_tiles.update(used_tiles_for_map)
+            print(f"[info] map {map_file.name}: found {len(used_tiles_for_map)} directly used tiles")
+
+        if args.map:
+            print(
+                f"[info] --map selected {len(selected_map_names)} map(s): "
+                f"{', '.join(sorted(selected_map_names))}"
+            )
+        else:
+            print(f"[info] --map not provided: using all maps ({len(selected_map_names)} total)")
+
+        print(f"[info] map-based tile restriction initial set size: {len(required_tiles)}")
 
         expanded_tiles = expand_required_tiles_with_animation_frames(arttool, temp_dir, required_tiles)
         added_tiles = len(expanded_tiles) - len(required_tiles)
         if added_tiles > 0:
             required_tiles = expanded_tiles
             print(
-                f"[info] --map {map_file.name}: added {added_tiles} animation-frame tiles "
+                f"[info] map-based tile set: added {added_tiles} animation-frame tiles "
                 f"(total now {len(required_tiles)})"
             )
 
@@ -898,16 +933,25 @@ def main():
         if enemy_added_tiles > 0:
             required_tiles = enemy_expanded_tiles
             print(
-                f"[info] --map {map_file.name}: added {enemy_added_tiles} enemy runtime-frame tiles "
+                f"[info] map-based tile set: added {enemy_added_tiles} enemy runtime-frame tiles "
                 f"(total now {len(required_tiles)})"
             )
 
-        required_mid_files = determine_required_mid_files_from_user_con(temp_dir, selected_map_name)
+        required_mid_files = set()
+        for selected_map_name in sorted(selected_map_names):
+            map_required_mid_files = determine_required_mid_files_from_user_con(temp_dir, selected_map_name)
+            if map_required_mid_files is None:
+                required_mid_files = None
+                break
+            required_mid_files.update(map_required_mid_files)
+
         if required_mid_files is not None:
             print(
-                f"[info] --map {map_file.name}: including {len(required_mid_files)} music files "
-                "(title/end + selected map track)"
+                f"[info] map-based music filtering: including {len(required_mid_files)} music files "
+                "(title/end + all selected map tracks)"
             )
+    else:
+        print("[warn] No .MAP files found in extracted GRP; skipping map-based tile restriction")
 
     if required_tiles is not None:
         runtime_state_tiles = expand_required_tiles_with_runtime_state_tiles(required_tiles)
@@ -915,7 +959,7 @@ def main():
         if runtime_state_added > 0:
             required_tiles = runtime_state_tiles
             print(
-                f"[info] --map {map_file.name}: added {runtime_state_added} runtime state-transition tiles "
+                f"[info] map-based tile set: added {runtime_state_added} runtime state-transition tiles "
                 f"(total now {len(required_tiles)})"
             )
 
@@ -1296,11 +1340,11 @@ def main():
             or f.name.lower() in included_art_files
         ]
 
-    if selected_map_name is not None:
+    if selected_map_names:
         files = [
             f for f in files
             if f.suffix.lower() != ".map"
-            or f.name.lower() == selected_map_name
+            or f.name.lower() in selected_map_names
         ]
 
     if required_mid_files is not None:

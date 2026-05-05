@@ -68,8 +68,8 @@ $EXCLUDE_CSVS
 EOF
 
 #python3 duke3d_compact_grp.py --optipng --zopflipng --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp
-python3 duke3d_compact_grp.py --optipng --zopflipng --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --map E1L2.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp
+#python3 duke3d_compact_grp.py --optipng --zopflipng --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --map E1L2.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp
 
 #python3 duke3d_compact_grp.py --optipng --zopflipng --adpcmwav --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp
 #python3 duke3d_compact_grp.py --optipng --zopflipng --adpcmwav --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp /tmp/DUKE3D_v1.3d_shareware.grp
-#python3 duke3d_compact_grp.py --optipng --zopflipng --adpcmwav --ultraminimalmenu --pngfolder precalculated_pngs/ --keep-temp /tmp/DUKE3D_v1.3d_shareware.grp
+python3 duke3d_compact_grp.py --optipng --zopflipng --adpcmwav --ultraminimalmenu --pngfolder precalculated_pngs/ --keep-temp /tmp/DUKE3D_v1.3d_shareware.grp
