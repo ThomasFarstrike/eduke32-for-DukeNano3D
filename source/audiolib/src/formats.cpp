@@ -382,15 +382,12 @@ static bool MV_DecodeWAVIMAADPCM(uint8_t const *dataPtr, uint32_t dataSize, int 
     if ((channels != 1 && channels != 2) || blockAlign <= 0 || dataSize == 0)
         return false;
 
-    if ((dataSize % (uint32_t)blockAlign) != 0)
-        return false;
-
     uint32_t offset = 0;
 
     while (offset < dataSize)
     {
         uint8_t const *block = dataPtr + offset;
-        uint32_t const blockSize = (uint32_t)blockAlign;
+        uint32_t const blockSize = min((uint32_t)blockAlign, dataSize - offset);
         int const headerSize = 4 * channels;
 
         if (blockSize < (uint32_t)headerSize)
@@ -409,7 +406,10 @@ static bool MV_DecodeWAVIMAADPCM(uint8_t const *dataPtr, uint32_t dataSize, int 
                 return false;
         }
 
-        int const derivedSamplesPerBlock = 1 + ((int)blockSize - headerSize) * 2 / channels;
+        int const encodedBytes = (int)blockSize - headerSize;
+        int const derivedSamplesPerBlock = channels == 1
+            ? (1 + encodedBytes * 2)
+            : (1 + (encodedBytes / 8) * 8);
         if (derivedSamplesPerBlock <= 0)
             return false;
 
@@ -447,7 +447,7 @@ static bool MV_DecodeWAVIMAADPCM(uint8_t const *dataPtr, uint32_t dataSize, int 
             while (remaining > 0)
             {
                 if (src + 8 > srcEnd)
-                    return false;
+                    break;
 
                 uint8_t chBytes[2][4];
                 memcpy(chBytes[0], src, 4);
