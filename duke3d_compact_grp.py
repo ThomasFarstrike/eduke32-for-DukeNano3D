@@ -929,6 +929,20 @@ def main():
             f"menu/precache tiles; total required tiles now {len(required_tiles)}"
         )
 
+    # Final animation closure pass after all required-tile sources are merged
+    # (--map, runtime state tiles, --ultraminimalmenu, etc.).
+    # Without this, tiles introduced late (e.g. by --ultraminimalmenu) can miss
+    # their dependent PICANM frames and cause skipped animtilerange entries.
+    if required_tiles is not None:
+        fully_expanded_tiles = expand_required_tiles_with_animation_frames(arttool, temp_dir, required_tiles)
+        final_anim_added = len(fully_expanded_tiles) - len(required_tiles)
+        if final_anim_added > 0:
+            required_tiles = fully_expanded_tiles
+            print(
+                f"[info] required tiles finalization: added {final_anim_added} animation-frame tiles "
+                f"after merging all tile sources (total now {len(required_tiles)})"
+            )
+
     # arttool expects lowercase tilesXXX.art filenames for files we process.
     if selected_tile_files:
         for tile_file_index in sorted(selected_tile_files):
@@ -1180,6 +1194,7 @@ def main():
 
         emitted_anim_defs = 0
         skipped_anim_defs = 0
+        skipped_anim_details = []
         for anchor_tile in sorted(anim_def_candidates):
             info = anim_def_candidates[anchor_tile]
             first_tile = min(info["first"], info["last"])
@@ -1188,6 +1203,17 @@ def main():
 
             if not needed_tiles.issubset(written_tiles):
                 skipped_anim_defs += 1
+                missing_tiles = sorted(needed_tiles - written_tiles)
+                skipped_anim_details.append(
+                    {
+                        "anchor": anchor_tile,
+                        "first": first_tile,
+                        "last": last_tile,
+                        "type": info["type"],
+                        "speed": info["speed"],
+                        "missing": missing_tiles,
+                    }
+                )
                 continue
 
             range_end = info["first"] if info["type"] == 3 else info["last"]
@@ -1201,6 +1227,15 @@ def main():
             print(
                 f"[info] duke3d.def: emitted {emitted_anim_defs} animtilerange entries "
                 f"(skipped {skipped_anim_defs} due to incomplete frame coverage)"
+            )
+
+        for skipped in skipped_anim_details:
+            print(
+                "[info] duke3d.def: skipped animtilerange "
+                f"anchor={skipped['anchor']} range={skipped['first']}..{skipped['last']} "
+                f"type={skipped['type']} speed={skipped['speed']} "
+                f"reason=incomplete frame coverage; missing tiles: "
+                f"{','.join(str(t) for t in skipped['missing'])}"
             )
 
         if args.debug_tiles:
