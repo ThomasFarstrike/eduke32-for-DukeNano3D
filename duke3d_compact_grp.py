@@ -721,6 +721,24 @@ def expand_required_tiles_with_sprite_precache_ranges(required_tiles):
             "tiles": {568, 572, 921, 922, 923, 924, 938},
             # TOILETBROKE(568), STALLBROKE(572), TOILETWATER..+3(921..924), BROKEFIREHYDRENT(938)
         },
+        {
+            "name": "Switch on/off partner states (base+1)",
+            # From sector.cpp switch handling (REST_SWITCH_CASES + ACCESSSWITCH_CASES + DIPSWITCH_LIKE_CASES)
+            "triggers": {130, 132, 134, 136, 138, 140, 162, 164, 166, 168, 170, 712},
+            "tiles": {131, 133, 135, 137, 139, 141, 163, 165, 167, 169, 171, 713},
+        },
+        {
+            "name": "Screenbreak rotating trio",
+            # sector.cpp animates SCREENBREAK6..8 as a cycle when active
+            "triggers": {268, 269, 270},
+            "tiles": {268, 269, 270},
+        },
+        {
+            "name": "Grate break replacement state",
+            # sector.cpp damage handlers replace GRATE1 with BGRATE1
+            "triggers": {595},
+            "tiles": {596},
+        },
     ]
 
     for group in runtime_state_groups:
@@ -730,11 +748,14 @@ def expand_required_tiles_with_sprite_precache_ranges(required_tiles):
 
     return expanded
 
-
-def parse_sound_id_from_token(token: str, defines: dict):
-    if token.isdigit():
+def parse_tile_id_from_token(token: str, defines: dict):
+    if re.match(r"^-?\d+$", token):
         return int(token)
     return defines.get(token.lower())
+
+
+def parse_sound_id_from_token(token: str, defines: dict):
+    return parse_tile_id_from_token(token, defines)
 
 
 
@@ -801,6 +822,70 @@ def build_sound_maps_from_cons(temp_dir: Path):
         parse_con_defines_and_sounds(con_file, defines, voc_to_sound_ids, sound_fields_by_id)
 
     return voc_to_sound_ids, sound_fields_by_id
+
+
+
+def parse_con_defines_and_precache_ranges(con_path: Path, defines: dict, precache_ranges: dict):
+    with con_path.open("r", encoding="utf-8", errors="replace") as fh:
+        for raw_line in fh:
+            line = strip_con_line_comment(raw_line).strip()
+            if not line:
+                continue
+
+            tokens = line.split()
+            if not tokens:
+                continue
+
+            keyword = tokens[0].lower()
+            if keyword == "define" and len(tokens) >= 3:
+                name = tokens[1].lower()
+                value = tokens[2]
+                if re.match(r"^-?\d+$", value):
+                    defines[name] = int(value)
+                continue
+
+            # CON syntax: precache <startTile> <endTile> <cacheFlag>
+            if keyword == "precache" and len(tokens) >= 3:
+                start_tile = parse_tile_id_from_token(tokens[1], defines)
+                end_tile = parse_tile_id_from_token(tokens[2], defines)
+                if start_tile is None or end_tile is None:
+                    continue
+                if start_tile < 0 or end_tile < 0:
+                    continue
+                if end_tile < start_tile:
+                    start_tile, end_tile = end_tile, start_tile
+
+                previous_end = precache_ranges.get(start_tile, start_tile)
+                precache_ranges[start_tile] = max(previous_end, end_tile)
+
+
+def build_precache_ranges_from_cons(temp_dir: Path):
+    defines = {}
+    precache_ranges = {}
+
+    con_files = sorted(
+        [p for p in temp_dir.iterdir() if p.is_file() and p.suffix.lower() == ".con"],
+        key=lambda p: p.name.lower(),
+    )
+    for con_file in con_files:
+        parse_con_defines_and_precache_ranges(con_file, defines, precache_ranges)
+
+    return precache_ranges
+
+
+
+def expand_required_tiles_with_con_precache_ranges(required_tiles, precache_ranges):
+    if not required_tiles or not precache_ranges:
+        return set(required_tiles)
+
+    expanded = set(required_tiles)
+    for tile in list(required_tiles):
+        end_tile = precache_ranges.get(tile)
+        if end_tile is None:
+            continue
+        expanded.update(range(tile, end_tile + 1))
+
+    return expanded
 
 
 
@@ -1056,6 +1141,16 @@ def main():
             required_tiles = enemy_expanded_tiles
             print(
                 f"[info] map-based tile set: added {enemy_added_tiles} enemy runtime-frame tiles "
+                f"(total now {len(required_tiles)})"
+            )
+
+        con_precache_ranges = build_precache_ranges_from_cons(temp_dir)
+        con_precache_tiles = expand_required_tiles_with_con_precache_ranges(required_tiles, con_precache_ranges)
+        con_precache_added = len(con_precache_tiles) - len(required_tiles)
+        if con_precache_added > 0:
+            required_tiles = con_precache_tiles
+            print(
+                f"[info] map-based tile set: added {con_precache_added} CON precache-range tiles "
                 f"(total now {len(required_tiles)})"
             )
 
