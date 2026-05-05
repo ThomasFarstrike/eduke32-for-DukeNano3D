@@ -807,7 +807,7 @@ def build_sound_maps_from_cons(temp_dir: Path):
 def main():
     normalized_argv = normalize_case_insensitive_options(
         sys.argv[1:],
-        ["--pngfolder", "--map", "--includeart", "--ultraminimalmenu", "--excludefiles", "--adpcmwav"],
+        ["--pngfolder", "--map", "--includeart", "--ultraminimalmenu", "--excludefiles", "--adpcmwav", "--maxsoundsize"],
     )
 
     parser = argparse.ArgumentParser(description="Re-package Duke Nukem 3D GRP with PNG tiles and duke3d.def")
@@ -892,8 +892,17 @@ def main():
             "and emit matching sound { id N file name.wav } entries in duke3d.def"
         ),
     )
+    parser.add_argument(
+        "--maxsoundsize",
+        metavar="N",
+        type=int,
+        help="Exclude .VOC/.WAV files larger than N bytes from the final GRP",
+    )
 
     args = parser.parse_args(normalized_argv)
+
+    if args.maxsoundsize is not None and args.maxsoundsize < 0:
+        parser.error("--maxsoundsize requires a non-negative integer")
 
     selected_tile_files = set(args.tilefilestopng or [])
     included_art_files = set(args.includeart or [])
@@ -1142,6 +1151,12 @@ def main():
             for voc_file in voc_files:
                 if voc_file.name.lower() in excluded_files:
                     continue
+                if args.maxsoundsize is not None and voc_file.stat().st_size > args.maxsoundsize:
+                    print(
+                        f"[info] --maxsoundsize: skipping {voc_file.name} "
+                        f"({voc_file.stat().st_size} bytes > {args.maxsoundsize})"
+                    )
+                    continue
 
                 wav_name = f"{voc_file.stem.lower()}.wav"
                 wav_path = temp_dir / wav_name
@@ -1160,6 +1175,14 @@ def main():
                     if ffmpeg_proc.stderr:
                         print(ffmpeg_proc.stderr)
                     return 1
+
+                if args.maxsoundsize is not None and wav_path.stat().st_size > args.maxsoundsize:
+                    print(
+                        f"[info] --maxsoundsize: dropping converted {wav_name} "
+                        f"({wav_path.stat().st_size} bytes > {args.maxsoundsize})"
+                    )
+                    wav_path.unlink(missing_ok=True)
+                    continue
 
                 sound_ids = sorted(voc_sound_ids.get(voc_file.name.lower(), set()))
                 if not sound_ids:
@@ -1448,6 +1471,13 @@ def main():
 
     if excluded_files:
         files = [f for f in files if f.name.lower() not in excluded_files]
+
+    if args.maxsoundsize is not None:
+        files = [
+            f for f in files
+            if f.suffix.lower() not in {".voc", ".wav"}
+            or f.stat().st_size <= args.maxsoundsize
+        ]
 
     if args.adpcmwav and replaced_voc_files:
         files = [
