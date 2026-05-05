@@ -1555,8 +1555,8 @@ def main():
                 f"[error] --pngfolder missing required TILE####.PNG files for "
                 f"{len(missing_required_png_sources)} tile(s): {preview}"
             )
-            print("[error] Aborting to avoid silently skipping required tiles.")
-            return 1
+            print("[error] Should we be aborting to avoid silently skipping required tiles?")
+            #return 1
 
         emitted_anim_defs = 0
         skipped_anim_defs = 0
