@@ -336,12 +336,20 @@ static inline uint32_t MV_ReadLE32(uint8_t const *p)
     return (uint32_t)(p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24));
 }
 
-static int MV_DecodeIMAADPCMNibble(int predictor, int &index, int nibble)
+static int MV_DecodeIMAADPCMSymbol(int predictor, int &index, int code, int bitsPerSample)
 {
-    static int const indexTable[16] =
+    static int const indexTable4[16] =
     {
         -1, -1, -1, -1, 2, 4, 6, 8,
         -1, -1, -1, -1, 2, 4, 6, 8,
+    };
+
+    static int const indexTable3[4] = { -1, -1, 1, 2 };
+
+    static int const indexTable5[16] =
+    {
+        -1, -1, -1, -1, -1, -1, -1, -1,
+         1,  2,  4,  6,  8, 10, 13, 16,
     };
 
     static int const stepTable[89] =
@@ -361,25 +369,60 @@ static int MV_DecodeIMAADPCMNibble(int predictor, int &index, int nibble)
     };
 
     int const step = stepTable[index];
-    int delta = step >> 3;
+    int delta = 0;
 
-    if (nibble & 1) delta += step >> 2;
-    if (nibble & 2) delta += step >> 1;
-    if (nibble & 4) delta += step;
+    switch (bitsPerSample)
+    {
+        case 2:
+            delta = step * (code & 1) + (step >> 1);
+            predictor += (code & 2) ? -delta : delta;
+            index += (code & 1) * 3 - 1;
+            break;
 
-    predictor += (nibble & 8) ? -delta : delta;
+        case 3:
+            delta = step >> 2;
+            if (code & 1) delta += step >> 1;
+            if (code & 2) delta += step;
+            predictor += (code & 4) ? -delta : delta;
+            index += indexTable3[code & 3];
+            break;
+
+        case 4:
+            delta = step >> 3;
+            if (code & 1) delta += step >> 2;
+            if (code & 2) delta += step >> 1;
+            if (code & 4) delta += step;
+            predictor += (code & 8) ? -delta : delta;
+            index += indexTable4[code & 15];
+            break;
+
+        case 5:
+            delta = step >> 4;
+            if (code & 1) delta += step >> 3;
+            if (code & 2) delta += step >> 2;
+            if (code & 4) delta += step >> 1;
+            if (code & 8) delta += step;
+            predictor += (code & 0x10) ? -delta : delta;
+            index += indexTable5[code & 0x0f];
+            break;
+
+        default:
+            return predictor;
+    }
+
     predictor = clamp(predictor, INT16_MIN, INT16_MAX);
-
-    index += indexTable[nibble & 15];
     index = clamp(index, 0, 88);
 
     return predictor;
 }
 
 static bool MV_DecodeWAVIMAADPCM(uint8_t const *dataPtr, uint32_t dataSize, int channels, int blockAlign,
-                                 int samplesPerBlock, std::vector<int16_t> &decoded)
+                                 int bitsPerSample, int samplesPerBlock, std::vector<int16_t> &decoded)
 {
     if ((channels != 1 && channels != 2) || blockAlign <= 0 || dataSize == 0)
+        return false;
+
+    if (bitsPerSample < 2 || bitsPerSample > 5)
         return false;
 
     uint32_t offset = 0;
@@ -407,9 +450,8 @@ static bool MV_DecodeWAVIMAADPCM(uint8_t const *dataPtr, uint32_t dataSize, int 
         }
 
         int const encodedBytes = (int)blockSize - headerSize;
-        int const derivedSamplesPerBlock = channels == 1
-            ? (1 + encodedBytes * 2)
-            : (1 + (encodedBytes / 8) * 8);
+        int const bytesPerChannel = encodedBytes / channels;
+        int const derivedSamplesPerBlock = 1 + (bytesPerChannel * 8) / bitsPerSample;
         if (derivedSamplesPerBlock <= 0)
             return false;
 
@@ -417,56 +459,42 @@ static bool MV_DecodeWAVIMAADPCM(uint8_t const *dataPtr, uint32_t dataSize, int 
         if (blockSamplesPerChannel <= 0)
             return false;
 
+        size_t const blockStart = decoded.size();
+        decoded.resize(blockStart + (size_t)blockSamplesPerChannel * channels);
+
         for (int ch = 0; ch < channels; ++ch)
-            decoded.push_back((int16_t)predictor[ch]);
+            decoded[blockStart + ch] = (int16_t)predictor[ch];
 
-        int remaining = blockSamplesPerChannel - 1;
+        int const remaining = blockSamplesPerChannel - 1;
         uint8_t const *src = block + headerSize;
-        uint8_t const *srcEnd = block + blockSize;
+        int const streamBytes = bytesPerChannel * channels;
 
-        if (channels == 1)
+        for (int ch = 0; ch < channels; ++ch)
         {
-            while (remaining > 0)
+            int shiftBits = 0;
+            int numBits = 0;
+            int byteCursor = 0;
+
+            for (int i = 0; i < remaining; ++i)
             {
-                if (src >= srcEnd)
-                    return false;
-
-                uint8_t const byte = *src++;
-                predictor[0] = MV_DecodeIMAADPCMNibble(predictor[0], index[0], byte & 0x0f);
-                decoded.push_back((int16_t)predictor[0]);
-                if (--remaining <= 0)
-                    break;
-
-                predictor[0] = MV_DecodeIMAADPCMNibble(predictor[0], index[0], byte >> 4);
-                decoded.push_back((int16_t)predictor[0]);
-                --remaining;
-            }
-        }
-        else
-        {
-            while (remaining > 0)
-            {
-                if (src + 8 > srcEnd)
-                    break;
-
-                uint8_t chBytes[2][4];
-                memcpy(chBytes[0], src, 4);
-                memcpy(chBytes[1], src + 4, 4);
-                src += 8;
-
-                for (int i = 0; i < 8 && remaining > 0; ++i)
+                while (numBits < bitsPerSample)
                 {
-                    for (int ch = 0; ch < 2; ++ch)
-                    {
-                        uint8_t const byte = chBytes[ch][i >> 1];
-                        int const nibble = (i & 1) ? (byte >> 4) : (byte & 0x0f);
-                        predictor[ch] = MV_DecodeIMAADPCMNibble(predictor[ch], index[ch], nibble);
-                    }
+                    int const byteIndex = (byteCursor & ~3) * channels + (ch * 4) + (byteCursor & 3);
+                    if (byteIndex >= streamBytes)
+                        return false;
 
-                    decoded.push_back((int16_t)predictor[0]);
-                    decoded.push_back((int16_t)predictor[1]);
-                    --remaining;
+                    shiftBits |= (int)src[byteIndex] << numBits;
+                    numBits += 8;
+                    ++byteCursor;
                 }
+
+                int const codeMask = (1 << bitsPerSample) - 1;
+                int const code = shiftBits & codeMask;
+                shiftBits >>= bitsPerSample;
+                numBits -= bitsPerSample;
+
+                predictor[ch] = MV_DecodeIMAADPCMSymbol(predictor[ch], index[ch], code, bitsPerSample);
+                decoded[blockStart + (size_t)(i + 1) * channels + ch] = (int16_t)predictor[ch];
             }
         }
 
@@ -595,7 +623,7 @@ int MV_PlayWAV(char *ptr, uint32_t length, int loopstart, int loopend, int pitch
             return MV_SetErrorCode(MV_InvalidFile);
 
         std::vector<int16_t> decoded;
-        if (!MV_DecodeWAVIMAADPCM(sampleData, sampleDataSize, nChannels, nBlockAlign, samplesPerBlock, decoded) || decoded.empty())
+        if (!MV_DecodeWAVIMAADPCM(sampleData, sampleDataSize, nChannels, nBlockAlign, nBitsPerSample, samplesPerBlock, decoded) || decoded.empty())
             return MV_SetErrorCode(MV_InvalidFile);
 
         size_t const decodedBytes = decoded.size() * sizeof(int16_t);
