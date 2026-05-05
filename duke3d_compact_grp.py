@@ -616,7 +616,7 @@ def parse_sound_id_from_token(token: str, defines: dict):
 
 
 
-def parse_con_defines_and_sounds(con_path: Path, defines: dict, voc_to_sound_id: dict):
+def parse_con_defines_and_sounds(con_path: Path, defines: dict, voc_to_sound_id: dict, sound_fields_by_id: dict):
     with con_path.open("r", encoding="utf-8", errors="replace") as fh:
         for raw_line in fh:
             line = strip_con_line_comment(raw_line).strip()
@@ -626,7 +626,7 @@ def parse_con_defines_and_sounds(con_path: Path, defines: dict, voc_to_sound_id:
             # Examples:
             #   define PISTOL_FIRE 3
             #   sound PISTOL_FIRE PISTOL.VOC ...
-            #   definesound INSERT_CLIP clipin.voc ...
+            #   definesound INSERT_CLIP clipin.voc 0 0 0 0 0
             tokens = line.split()
             if not tokens:
                 continue
@@ -646,14 +646,28 @@ def parse_con_defines_and_sounds(con_path: Path, defines: dict, voc_to_sound_id:
                     continue
 
                 sound_id = parse_sound_id_from_token(sound_token, defines)
-                if sound_id is not None:
-                    voc_to_sound_id[sound_file.lower()] = sound_id
+                if sound_id is None:
+                    continue
+
+                voc_to_sound_id[sound_file.lower()] = sound_id
+
+                # USER.CON definesound format:
+                # definesound <value> <filename> <pitch_lower> <pitch_upper> <priority> <type> <distance>
+                if keyword == "definesound" and len(tokens) >= 8:
+                    sound_fields_by_id[sound_id] = {
+                        "minpitch": tokens[3],
+                        "maxpitch": tokens[4],
+                        "priority": tokens[5],
+                        "type": tokens[6],
+                        "distance": tokens[7],
+                    }
 
 
 
-def build_voc_sound_id_map_from_cons(temp_dir: Path):
+def build_sound_maps_from_cons(temp_dir: Path):
     defines = {}
     voc_to_sound_id = {}
+    sound_fields_by_id = {}
 
     # Parse all CON files in deterministic order. This covers common DUKE3D
     # layouts where sound tokens are defined in one CON and used in another.
@@ -662,9 +676,9 @@ def build_voc_sound_id_map_from_cons(temp_dir: Path):
         key=lambda p: p.name.lower(),
     )
     for con_file in con_files:
-        parse_con_defines_and_sounds(con_file, defines, voc_to_sound_id)
+        parse_con_defines_and_sounds(con_file, defines, voc_to_sound_id, sound_fields_by_id)
 
-    return voc_to_sound_id
+    return voc_to_sound_id, sound_fields_by_id
 
 
 
@@ -945,7 +959,7 @@ def main():
         emitted_anim_ranges = []
 
         if args.adpcmwav:
-            voc_sound_ids = build_voc_sound_id_map_from_cons(temp_dir)
+            voc_sound_ids, sound_fields_by_id = build_sound_maps_from_cons(temp_dir)
             emitted_sound_defs = 0
 
             voc_files = sorted(
@@ -980,7 +994,22 @@ def main():
                     print(f"[warn] No sound ID found in CON files for {voc_file.name}; skipping sound {{ ... }} def entry")
                     continue
 
-                duke_def.write(f"sound {{ id {sound_id} file {wav_name} }}\n")
+                sound_fields = sound_fields_by_id.get(sound_id)
+                if sound_fields:
+                    duke_def.write(
+                        "sound { "
+                        f"id {sound_id} "
+                        f"file {wav_name} "
+                        f"minpitch {sound_fields['minpitch']} "
+                        f"maxpitch {sound_fields['maxpitch']} "
+                        f"priority {sound_fields['priority']} "
+                        f"type {sound_fields['type']} "
+                        f"distance {sound_fields['distance']} "
+                        "}\n"
+                    )
+                else:
+                    duke_def.write(f"sound {{ id {sound_id} file {wav_name} }}\n")
+
                 emitted_sound_defs += 1
                 replaced_voc_files.add(voc_file.name.lower())
 
