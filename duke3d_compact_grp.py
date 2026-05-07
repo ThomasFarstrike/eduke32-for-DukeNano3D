@@ -531,6 +531,9 @@ def build_ultra_minimal_menu_allowlist():
     # Knee/quick-kick HUD sequence frequently needed in minimal packs
     allow.update(range(2521, 2523))   # TILE2521 .. TILE2522
 
+    # End-of-level nuke/destruct hand overlay (FIST)
+    allow.add(1640)                   # FIST
+
     # ---------- Core projectile/FX tiles preloaded by cacheDukeTiles() ----------
     allow.update(range(0, 61))        # startup baseline tiles 0..60
 

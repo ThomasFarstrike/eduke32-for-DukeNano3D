@@ -18,6 +18,7 @@
 # 0966 is a poster, replace it by something smaller?
 # 0095 is the night sky with stars
 # 0989-0993 are the skyline, replace with something smaller? or something repeating?
+# leave these: SHOTGUN7.VOC,
 EXCLUDE_CSVS=$(cat <<'EOF'
 TILE1102.PNG,some high def image
 TILE2445.PNG,help screen can be omitted in this pack
@@ -39,7 +40,6 @@ TILE3292.PNG,end story picture and text
 BONUS.VOC,274k
 BARMUSIC.VOC,70k
 !PRISON.VOC,
-SHOTGUN7.VOC,
 CHEW05.VOC,
 !PIG.VOC
 AMB81B.VOC,50k
@@ -67,7 +67,7 @@ done <<EOF
 $EXCLUDE_CSVS
 EOF
 
-#python3 duke3d_compact_grp.py --optipng --zopflipng --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp
+python3 duke3d_compact_grp.py --optipng --zopflipng --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp --output newfile.grp
 #python3 duke3d_compact_grp.py --optipng --zopflipng --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --map E1L2.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp
 
 #python3 duke3d_compact_grp.py --optipng --zopflipng --adpcmwav --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp --output E1L1_adpcm_some_excludes.grp
@@ -80,5 +80,5 @@ EOF
 
 #python3 duke3d_compact_grp.py --optipng --zopflipng --adpcmwav --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp --output newfile.grp --adpcmwidth 2
 
-python3 duke3d_compact_grp.py --optipng --zopflipng --adpcmwav --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp --output newfile.grp --maxsoundsize 15000 --adpcmwidth 2
+#python3 duke3d_compact_grp.py --optipng --zopflipng --adpcmwav --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp --output newfile.grp --maxsoundsize 15000 --adpcmwidth 2
 #python3 duke3d_compact_grp.py --optipng --zopflipng --adpcmwav --ultraminimalmenu --pngfolder precalculated_pngs/ --map E1L1.MAP --keep-temp "${EXCLUDE_ARGS[@]}" /tmp/DUKE3D_v1.3d_shareware.grp --output newfile.grp --maxsoundsize 15000 --adpcmwidth 4
