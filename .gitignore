@@ -21,6 +21,7 @@ obj/
 /kmd2tool
 /makesdlkeytrans
 /map2stl
+/mapinfo
 /md2tool
 /mkpalette
 /transpal
@@ -87,3 +88,10 @@ project.xcworkspace/
 .DS_Store
 ._*
 /source/voidwrap/sdk/
+
+*.grp
+*.grp.zip
+
+__pycache__/
+
+precalculated_pngs/
