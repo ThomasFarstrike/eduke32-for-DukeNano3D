@@ -454,48 +454,15 @@ def normalize_case_insensitive_options(argv, option_names):
     return normalized
 
 
-def build_ultra_minimal_menu_allowlist():
+def build_runtime_essentials_allowlist():
     """
-    Runtime baseline tile allowlist for `--map` builds.
+    Runtime-essential tile allowlist for `--map` builds.
 
-    Source of truth is EDuke32 startup/hud/precache code paths, primarily:
-      - source/duke3d/src/premap.cpp: cacheDukeTiles()
-      - source/duke3d/src/screens.cpp / menus.cpp: crosshair + menu screens
-
-    Goal: keep the set minimal while still including non-map runtime essentials
-    (HUD weapon tiles, projectiles/effects, fonts/menu screens, crosshair).
+    `mapinfo` only sees direct map picnums. It does not include HUD/view-weapon
+    tiles and several always-needed projectile/FX tiles that EDuke32 preloads at
+    runtime (premap.cpp::cacheDukeTiles()).
     """
     allow = set()
-
-    # ---------- Menu and font/UI infrastructure ----------
-    allow.update(range(2456, 2491))   # MENUSCREEN .. DUKECAR-1
-    allow.update(range(2813, 2820))   # SPINNINGNUKEICON .. SPINNINGNUKEICON+6
-    allow.update({2820, 2821})        # BIGFNTCURSOR / SMALLFNTCURSOR
-    allow.update(range(2822, 2916))   # STARTALPHANUM .. ENDALPHANUM
-    allow.update(range(2929, 3022))   # BIGALPHANUM-11 .. BIGALPHANUM+81
-    allow.update(range(3072, 3165))   # MINIFONT .. MINIFONT+92
-
-    # Explicit menu screens drawn outside broad menu ranges.
-    allow.update({
-        1141,             # menu background image (TILE1141.PNG)
-        2445,             # F1HELP
-        2499,             # INGAMEDUKETHREEDEE
-        2503,             # PLUTOPAKSPRITE+2
-        2504, 2505, 2506, # credits backgrounds (2504+cm-MENU_CREDITS)
-        3240,             # BONUSSCREEN
-        3280,             # TEXTSTORY
-        3281,             # LOADSCREEN
-    })
-
-    # ---------- Startup screen overlays (easy to tweak) ----------
-    # These are required for the boot/title startup sequence and its logo overlays.
-    STARTUP_SCREEN_TILES = {
-        2492,  # STARTUP_3D_REALMS_LOGO (TILE2492.PNG)
-        2493,  # STARTUP_DUKE_NUKEM_SCREEN (TILE2493.PNG)
-        2497,  # STARTUP_LOGO_OVERLAY_A (TILE2497.PNG)
-        2498,  # STARTUP_LOGO_OVERLAY_B (TILE2498.PNG)
-    }
-    allow.update(STARTUP_SCREEN_TILES)
 
     # ---------- Player HUD and first-person weapon tiles ----------
     allow.add(2523)                   # CROSSHAIR
@@ -519,7 +486,7 @@ def build_ultra_minimal_menu_allowlist():
     allow.update(range(2554, 2562))   # SHRINKER-2 .. SHRINKER+5
 
     # Tripbomb/remote hand sequences
-    allow.update(range(2563, 2568))   # HANDHOLDINGLASER .. HANDHOLDINGLASER+4
+    allow.update(range(2563, 2569))   # HANDHOLDINGLASER .. HANDHOLDINGACCESS (includes TILE2568)
     allow.update(range(2570, 2577))   # HANDREMOTE .. HANDREMOTE+6 (includes TILE2576)
 
     # Shotgun view weapon tiles
@@ -565,6 +532,52 @@ def build_ultra_minimal_menu_allowlist():
 
     allow.update(range(2595, 2599))   # SHOTSPARK1 .. +3
     allow.update(range(2605, 2612))   # RPG .. RPG+6
+
+    return allow
+
+
+def build_ultra_minimal_menu_allowlist():
+    """
+    Runtime baseline tile allowlist for `--map` builds.
+
+    Source of truth is EDuke32 startup/hud/precache code paths, primarily:
+      - source/duke3d/src/premap.cpp: cacheDukeTiles()
+      - source/duke3d/src/screens.cpp / menus.cpp: crosshair + menu screens
+
+    Goal: keep the menu set minimal while still including startup/title/menu
+    infrastructure and menu fonts/screens.
+    """
+    allow = set()
+
+    # ---------- Menu and font/UI infrastructure ----------
+    allow.update(range(2456, 2491))   # MENUSCREEN .. DUKECAR-1
+    allow.update(range(2813, 2820))   # SPINNINGNUKEICON .. SPINNINGNUKEICON+6
+    allow.update({2820, 2821})        # BIGFNTCURSOR / SMALLFNTCURSOR
+    allow.update(range(2822, 2916))   # STARTALPHANUM .. ENDALPHANUM
+    allow.update(range(2929, 3022))   # BIGALPHANUM-11 .. BIGALPHANUM+81
+    allow.update(range(3072, 3165))   # MINIFONT .. MINIFONT+92
+
+    # Explicit menu screens drawn outside broad menu ranges.
+    allow.update({
+        1141,             # menu background image (TILE1141.PNG)
+        2445,             # F1HELP
+        2499,             # INGAMEDUKETHREEDEE
+        2503,             # PLUTOPAKSPRITE+2
+        2504, 2505, 2506, # credits backgrounds (2504+cm-MENU_CREDITS)
+        3240,             # BONUSSCREEN
+        3280,             # TEXTSTORY
+        3281,             # LOADSCREEN
+    })
+
+    # ---------- Startup screen overlays (easy to tweak) ----------
+    # These are required for the boot/title startup sequence and its logo overlays.
+    STARTUP_SCREEN_TILES = {
+        2492,  # STARTUP_3D_REALMS_LOGO (TILE2492.PNG)
+        2493,  # STARTUP_DUKE_NUKEM_SCREEN (TILE2493.PNG)
+        2497,  # STARTUP_LOGO_OVERLAY_A (TILE2497.PNG)
+        2498,  # STARTUP_LOGO_OVERLAY_B (TILE2498.PNG)
+    }
+    allow.update(STARTUP_SCREEN_TILES)
 
     return allow
 
@@ -759,6 +772,13 @@ def expand_required_tiles_with_sprite_precache_ranges(required_tiles):
                 280, 281,
             },
             "tiles": {357, 358, 359},
+        },
+        {
+            "name": "Tech wall broken replacement states",
+            # sector.cpp checkhitwall() breakwall() remaps W_TECHWALL* to
+            # W_HITTECHWALL* replacements at runtime.
+            "triggers": {293, 297, 299, 301, 305, 306, 307, 4130, 4131, 4132, 4133},
+            "tiles": {360, 361, 362, 363, 4144, 4145, 4147},
         },
     ]
 
@@ -1219,6 +1239,17 @@ def main():
             required_tiles = sprite_precache_tiles
             print(
                 f"[info] map-based tile set: added {sprite_precache_added} sprite runtime-precache tiles "
+                f"(total now {len(required_tiles)})"
+            )
+
+        runtime_essential_tiles = build_runtime_essentials_allowlist()
+        runtime_essential_expanded = set(required_tiles)
+        runtime_essential_expanded.update(runtime_essential_tiles)
+        runtime_essential_added = len(runtime_essential_expanded) - len(required_tiles)
+        if runtime_essential_added > 0:
+            required_tiles = runtime_essential_expanded
+            print(
+                f"[info] map-based tile set: added {runtime_essential_added} runtime-essential tiles "
                 f"(total now {len(required_tiles)})"
             )
 
