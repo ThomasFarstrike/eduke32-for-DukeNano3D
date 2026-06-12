@@ -332,8 +332,8 @@ public:
             return;
         }
 
-        end   = localtileend_ - tile;
         tile -= localtilestart_;
+        end   = localtileend_ - localtilestart_;
 
         markprelength_ = markpostlength_ = 0;
 
@@ -946,11 +946,11 @@ public:
             ARTFile art(filename);
 
             if (art.getNumTiles() == 0) {
-                // no file exists, so give up
+                // no file exists
                 if (tilenum_ < 0) {
                     return ERR_NO_ERROR;
                 }
-                break;
+                continue;
             }
 
             if (tilenum_ >= 0) {
@@ -1171,8 +1171,8 @@ public:
             ARTFile art(makefilename(filenum));
 
             if (art.getNumTiles() == 0) {
-                // no file exists, so give up
-                break;
+                // no file exists, skip it
+                continue;
             }
 
             if (tilenum_ >= art.getFirstTile() && tilenum_ <= art.getLastTile()) {
@@ -1224,8 +1224,8 @@ public:
             ARTFile art(makefilename(filenum));
 
             if (art.getNumTiles() == 0) {
-                // no file exists, so give up
-                break;
+                // no file exists, skip it
+                continue;
             }
 
             if (tilenum_ >= art.getFirstTile() && tilenum_ <= art.getLastTile()) {
@@ -1331,8 +1331,8 @@ public:
             ARTFile art(makefilename(filenum));
 
             if (art.getNumTiles() == 0) {
-                // no file exists, so give up
-                break;
+                // no file exists, skip it
+                continue;
             }
 
             if (tilenum_ >= art.getFirstTile() && tilenum_ <= art.getLastTile()) {
