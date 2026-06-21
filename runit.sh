@@ -4,8 +4,8 @@
 #./eduke32 -usecwd -g ../outputs/E1L1-6_nearcomplete.grp
 #./eduke32 -usecwd -g ../outputs/E1L1-6_compromise.grp
 #./eduke32 -usecwd -g ../outputs_precalculated_pngs_pngquant_40-71_2/E1L1.grp
-./eduke32 -usecwd -g ../outputs/E1L1-2_compromise.grp
-#./eduke32 -usecwd -g ../outputs_onlysmaller_replaceskyline/E1L1-4_heavycompromise.grp
+#./eduke32 -usecwd -g ../outputs_starryskyline_fixpipebomb/E1L1-2_compromise.grp
+./eduke32 -usecwd -g ../outputs_onlysmaller_replaceskyline/E1L1-4_heavycompromise.grp
 
 # original:
 #./eduke32 -usecwd -g ../input/DUKE3D_v1.3d_shareware.grp
